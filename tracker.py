@@ -17,9 +17,16 @@ DATA_FILE = "alsterbrueder_daten.json"
 POSITIONS = [
     "TW", "IV", "LV", "RV", "ZDM", "ZM", "ZOM", "LM", "RM", "LF", "RF", "ST"
 ]
+# Die 5 festen Phasen für dein Alsterbrüder-Training:
+TRAINING_PHASES = [
+    "1. Aufwärmen", 
+    "2. Passspiel", 
+    "3. Rondo", 
+    "4. Torschuss / Spielform", 
+    "5. Abschlussspiel"
+]
 
-# 🌍 HIER DEINE KOPIERTE GOOGLE GOOGLE APPS SCRIPT URL EINTRAGEN:
-# (Denk dran, deinen /exec Link hier wieder einzufügen!)
+# 🌍 DEINE FEST HINTERLEGTE GOOGLE CLOUD URL:
 API_URL = "https://script.google.com/macros/s/AKfycbwC5946xV9qMBEiTkPYTt1sqP0n0ohPN_n2QqA1nPWurK63_QYs9WiTwUNIN2J0Qs9MPA/exec"
 
 # --- SIDEBAR: PASSWORT-SCHUTZ (TRAINER VS. ELTERN) ---
@@ -63,32 +70,31 @@ def generiere_testdaten():
         if random.random() > 0.6:
             pos.append(random.choice([p for p in POSITIONS if p not in pos]))
         spieler_liste.append({
-            "id": i + 1, 
-            "name": name, 
-            "role": "Spieler", 
-            "number": str(random.randint(2, 99)), 
-            "positions": pos, 
-            "training": [], 
-            "matches": []
+            "id": i + 1, "name": name, "role": "Spieler", 
+            "number": str(random.randint(2, 99)), "positions": pos, 
+            "training": [], "matches": []
         })
     spieler_liste.append({
-        "id": 999, 
-        "name": "Pascal (Trainer)", 
-        "role": "Trainer", 
-        "number": "", 
-        "positions": [], 
-        "training": [], 
-        "matches": []
+        "id": 999, "name": "Pascal (Trainer)", "role": "Trainer", 
+        "number": "", "positions": [], "training": [], "matches": []
     })
-    return {"players": spieler_liste}
+    
+    uebungs_liste = [
+        {"id": 1, "name": "Kognitives Einlaufen", "phase": "1. Aufwärmen", "schwerpunkt": "Passspiel", "spieler": "Alle", "aufbau": "Hütchenviereck. Einlaufen mit Richtungswechsel auf Signal.", "grafik": ""},
+        {"id": 2, "name": "Y-Passform", "phase": "2. Passspiel", "schwerpunkt": "Passspiel", "spieler": "10-12", "aufbau": "Passen im Y-Muster mit Nachlaufen. Fokus auf offene Stellung.", "grafik": ""},
+        {"id": 3, "name": "4 gegen 2 Rondo", "phase": "3. Rondo", "schwerpunkt": "Umschalten", "spieler": "6", "aufbau": "Klassisches Rondo im 10x10m Feld. Maximal 2 Kontakte.", "grafik": ""},
+        {"id": 4, "name": "Flügelspiel mit Torschuss", "phase": "4. Torschuss / Spielform", "schwerpunkt": "Torschuss", "spieler": "Alle", "aufbau": "Pass in die Gasse, Flanke und Torschuss im Zentrum.", "grafik": ""},
+        {"id": 5, "name": "Freies Spiel 8v8", "phase": "5. Abschlussspiel", "schwerpunkt": "Spielform", "spieler": "Alle", "aufbau": "Zwei Tore, freies Spiel im doppelten Strafraum.", "grafik": ""}
+    ]
+    return {"players": spieler_liste, "exercises": uebungs_liste}
 
 def lade_daten():
     data = None
     if API_URL:
         try:
-            res = requests.get(API_URL, timeout=10)
+            res = requests.get(API_URL, timeout=15)
             if res.text.strip().startswith("<!DOCTYPE") or "html" in res.text.lower():
-                st.error("⚠️ Google verweigert den Zugriff! HTML erhalten.")
+                st.error("⚠️ Google verweigert den Zugriff! Cloud-URL prüfen.")
                 data = None
             else:
                 data = res.json()
@@ -103,6 +109,9 @@ def lade_daten():
         else:
             data = generiere_testdaten()
 
+    if "players" not in data: data["players"] = []
+    if "exercises" not in data: data["exercises"] = []
+
     for p in data.get("players", []):
         if "role" not in p: p["role"] = "Spieler"
         if "number" not in p: p["number"] = ""
@@ -112,24 +121,33 @@ def lade_daten():
 def speichere_daten(data):
     if API_URL:
         try:
-            requests.post(
+            res = requests.post(
                 API_URL, 
                 data=json.dumps(data), 
                 headers={"Content-Type": "application/json"}, 
-                timeout=10
+                timeout=30
             )
-            return
+            if res.status_code in [200, 302]:
+                return True
+            else:
+                st.error(f"Fehler beim Sichern in der Cloud. Status: {res.status_code}")
+                return False
         except Exception as e:
-            st.error(f"Fehler beim Sichern in der Google-Cloud: {e}")
+            st.error(f"Verbindung zur Google-Cloud unterbrochen: {e}")
+            return False
             
-    with open(DATA_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=4)
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=4)
+        return True
+    except Exception as e:
+        st.error(f"Lokaler Speicherfehler: {e}")
+        return False
 
 # --- INITIALISIERUNG DER SPEICHERRÄUME ---
 if "data" not in st.session_state:
     st.session_state.data = lade_daten()
 
-# 🧠 HIER IST DIE REPARATUR: Zuweisungs-Speicher für die KI von Sekunde 1 an bereitstellen
 if "zuweisungen" not in st.session_state:
     st.session_state.zuweisungen = {}
 
@@ -144,7 +162,6 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
     beteiligungs_quote = (len(anwesend_tr) / gesamt_tr * 100) if gesamt_tr > 0 else 0
 
     spiele = spieler.get("matches", [])
-    
     tore_gesamt = 0
     vorlagen_gesamt = 0
     for m in spiele:
@@ -167,14 +184,9 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
         elif beteiligungs_quote >= 50: club = "🥉 Bronze-Club"
 
     return {
-        "Nr.": nr,
-        "Name": spieler["name"],
-        "Positionen": ", ".join(spieler["positions"]),
-        "Beteiligung": round(beteiligungs_quote),
-        "Meilenstein": club,
-        "⚽ Tore": tore_gesamt,
-        "🅰️ Vorlagen": vorlagen_gesamt,
-        "🔥 Scorer": tore_gesamt + vorlagen_gesamt
+        "Nr.": nr, "Name": spieler["name"], "Positionen": ", ".join(spieler["positions"]),
+        "Beteiligung": round(beteiligungs_quote), "Meilenstein": club,
+        "⚽ Tore": tore_gesamt, "🅰️ Vorlagen": vorlagen_gesamt, "🔥 Scorer": tore_gesamt + vorlagen_gesamt
     }
 
 # --- GENERATOR FÜR DAS INTERAKTIVE DRAG & DROP SPIELFELD ---
@@ -233,6 +245,7 @@ if is_trainer:
 tabs_definition += ["🤖 KI Twin-Teams"]
 if is_trainer: 
     tabs_definition += ["📥 Import (SpielerPlus)"]
+tabs_definition += ["📋 Trainingsplaner"]
 tabs_definition += ["🏆 Liga-Tabelle"]
 
 rendered_tabs = st.tabs(tabs_definition)
@@ -250,8 +263,7 @@ with tab_map["📊 Übersicht"]:
             for t in p.get("training", []):
                 typen_set.add(t.get("type", "Training"))
         alle_event_typen = sorted(list(typen_set))
-        if not alle_event_typen: 
-            alle_event_typen = ["Training"]
+        if not alle_event_typen: alle_event_typen = ["Training"]
             
         gewaehlte_typen = st.multiselect("Beteiligung filtern nach Event-Typ:", alle_event_typen, default=alle_event_typen)
         
@@ -259,77 +271,45 @@ with tab_map["📊 Übersicht"]:
             statistiken = [berechne_statistiken(p, gewaehlte_typen) for p in nur_spieler]
             df = pd.DataFrame(statistiken).sort_values(by="Beteiligung", ascending=False).reset_index(drop=True)
             
-            st.dataframe(
-                df, 
-                column_config={
-                    "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), 
-                    "Name": st.column_config.TextColumn("Spielername"), 
-                    "Positionen": st.column_config.TextColumn("Positionen"), 
-                    "Beteiligung": st.column_config.ProgressColumn("Trainingsbeteiligung", min_value=0, max_value=100, format="%d%%"), 
-                    "Meilenstein": st.column_config.TextColumn("Meilenstein-Status"), 
-                    "⚽ Tore": st.column_config.NumberColumn("⚽ Tore", format="%d"), 
-                    "🅰️ Vorlagen": st.column_config.NumberColumn("🅰️ Vorlagen", format="%d"), 
-                    "🔥 Scorer": st.column_config.NumberColumn("🔥 Scorer", format="%d")
-                }, 
-                hide_index=True, 
-                use_container_width=True
-            )
-            
-            st.divider()
-            st.markdown("### 👑 Der Trainings-Meilenstein-Club")
-            st.write("Hier werden die Jungs für ihren Fleiß im Training gefeiert!")
+            st.dataframe(df, column_config={"Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Name": st.column_config.TextColumn("Spielername"), "Positionen": st.column_config.TextColumn("Positionen"), "Beteiligung": st.column_config.ProgressColumn("Trainingsbeteiligung", min_value=0, max_value=100, format="%d%%"), "Meilenstein": st.column_config.TextColumn("Meilenstein-Status"), "⚽ Tore": st.column_config.NumberColumn("⚽ Tore", format="%d"), "🅰️ Vorlagen": st.column_config.NumberColumn("🅰️ Vorlagen", format="%d"), "🔥 Scorer": st.column_config.NumberColumn("🔥 Scorer", format="%d")}, hide_index=True, use_container_width=True)
+            st.divider(); st.markdown("### 👑 Der Trainings-Meilenstein-Club")
             
             mc1, mc2, mc3, mc4 = st.columns(4)
             with mc1: 
                 st.info("**👑 Königs-Club (100%)**")
                 for s in statistiken:
-                    if s["Meilenstein"] == "👑 Königs-Club":
-                        st.write(f"• {s['Name']}")
+                    if s["Meilenstein"] == "👑 Königs-Club": st.write(f"• {s['Name']}")
             with mc2: 
                 st.success("**🥇 Gold-Club (90%+)**")
                 for s in statistiken:
-                    if s["Meilenstein"] == "🥇 Gold-Club":
-                        st.write(f"• {s['Name']}")
+                    if s["Meilenstein"] == "🥇 Gold-Club": st.write(f"• {s['Name']}")
             with mc3: 
                 st.warning("**🥈 Silber-Club (75%+)**")
                 for s in statistiken:
-                    if s["Meilenstein"] == "🥈 Silber-Club":
-                        st.write(f"• {s['Name']}")
+                    if s["Meilenstein"] == "🥈 Silber-Club": st.write(f"• {s['Name']}")
             with mc4: 
                 st.error("**🥉 Bronze-Club (50%+)**")
                 for s in statistiken:
-                    if s["Meilenstein"] == "🥉 Bronze-Club":
-                        st.write(f"• {s['Name']}")
-        else: 
-            st.info("Keine Spieler im Kader.")
-            
+                    if s["Meilenstein"] == "🥉 Bronze-Club": st.write(f"• {s['Name']}")
+        else: st.info("Keine Spieler im Kader.")
         if nur_trainer: 
-            st.write("---")
-            trainer_namen = [t['name'] for t in nur_trainer]
+            st.write("---"); trainer_namen = [t['name'] for t in nur_trainer]
             st.success(f"**Verantwortliche:** {', '.join(trainer_namen)}")
-    else: 
-        st.info("Keine Mitglieder im Kader.")
+    else: st.info("Keine Mitglieder im Kader.")
 
 # --- TAB: SPIELÜBERSICHT ---
 with tab_map["📖 Spielübersicht"]:
     st.subheader("📖 Historische Spielübersicht")
-    
     spiele_set = set()
     for p in st.session_state.data["players"]:
         for m in p.get("matches", []):
             if m.get("opponent", "Unbekannt") != "Unbekannt":
                 spiele_set.add((m.get("date", "Unbekannt"), m.get("opponent", "Unbekannt"), m.get("type", "Spiel")))
-                
     spiele_liste = sorted(list(spiele_set), key=lambda x: x[0], reverse=True)
     
-    if not spiele_liste: 
-        st.info("Es wurden noch keine detaillierten Spiele geloggt.")
+    if not spiele_liste: st.info("Es wurden noch keine detaillierten Spiele geloggt.")
     else:
-        gewaehltes_spiel_idx = st.selectbox(
-            "Wähle ein Match aus:", 
-            range(len(spiele_liste)), 
-            format_func=lambda i: f"📅 {spiele_liste[i][0]} | [{spiele_liste[i][2]}] gegen {spiele_liste[i][1]}"
-        )
+        gewaehltes_spiel_idx = st.selectbox("Wähle ein Match aus:", range(len(spiele_liste)), format_func=lambda i: f"📅 {spiele_liste[i][0]} | [{spiele_liste[i][2]}] gegen {spiele_liste[i][1]}")
         sel_datum, sel_gegner, sel_art = spiele_liste[gewaehltes_spiel_idx]
         
         sel_res_blau, sel_res_gelb = ["-"]*4, ["-"]*4
@@ -340,9 +320,7 @@ with tab_map["📖 Spielübersicht"]:
                 sel_res_gelb = p_match.get("team_gelb_results", p_match.get("team_b_results", ["-"]*4))
                 break
                 
-        st.divider()
-        st.markdown(f"### ⚽ {sel_art} gegen **{sel_gegner}**\nSpieltag vom: **{sel_datum}**")
-        
+        st.divider(); st.markdown(f"### ⚽ {sel_art} gegen **{sel_gegner}**\nSpieltag vom: **{sel_datum}**")
         res_col1, res_col2 = st.columns(2)
         with res_col1: 
             st.markdown("<div style='color:#1e3a8a; font-weight:bold; margin-bottom:5px;'>🔵 Team Blau (4 Spiele):</div>", unsafe_allow_html=True)
@@ -360,13 +338,7 @@ with tab_map["📖 Spielübersicht"]:
                 if p_match:
                     t_val = p_match.get("team", "Blau" if p_match.get("played", True) else "Abwesend")
                     lbl = "🔵 Team Blau" if t_val == "Blau" else ("🟡 Team Gelb" if t_val == "Gelb" else ("🔄 Ersatzbank" if t_val == "Ersatz" else "❌ Nicht im Kader"))
-                    match_details.append({
-                        "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, 
-                        "Name": p["name"], 
-                        "Team / Status": lbl, 
-                        "⚽ Tore": p_match.get("goals", 0), 
-                        "Vorlagen": p_match.get("assists", 0)
-                    })
+                    match_details.append({"Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": lbl, "⚽ Tore": p_match.get("goals", 0), "Vorlagen": p_match.get("assists", 0)})
                     
         if match_details:
             df_details = pd.DataFrame(match_details).sort_values(by=["Team / Status", "Nr."], ascending=[True, True], na_position="last").reset_index(drop=True)
@@ -375,7 +347,6 @@ with tab_map["📖 Spielübersicht"]:
             c1.metric("Erzielte Tore (Gesamt)", df_details["⚽ Tore"].sum())
             c2.metric("Gesamtvorlagen", df_details["Vorlagen"].sum())
             c3.metric("Spieler aktiv", (df_details["Team / Status"] != "❌ Nicht im Kader").sum())
-            
             st.dataframe(df_details, column_config={"Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Name": st.column_config.TextColumn("Spielername"), "Team / Status": st.column_config.TextColumn("Einteilung"), "⚽ Tore": st.column_config.NumberColumn("Tore", format="%d"), "Vorlagen": st.column_config.NumberColumn("Vorlagen", format="%d")}, hide_index=True, use_container_width=True)
 
 # --- TAB 2: KADER (NUR TRAINER) ---
@@ -385,46 +356,17 @@ if "🏃‍♂️ Kader" in tab_map:
         kader_liste = []
         for p in st.session_state.data["players"]:
             pos = p.get("positions", [])
-            kader_liste.append({
-                "ID": str(p["id"]),
-                "Nr.": int(p.get("number", "")) if str(p.get("number", "")).isdigit() else None,
-                "Name": p["name"],
-                "Rolle": p.get("role", "Spieler"),
-                "Prio 1": pos[0] if len(pos) > 0 else "-",
-                "Prio 2": pos[1] if len(pos) > 1 else "-",
-                "Prio 3": pos[2] if len(pos) > 2 else "-",
-                "Prio 4": pos[3] if len(pos) > 3 else "-",
-                "Prio 5": pos[4] if len(pos) > 4 else "-"
-            })
+            kader_liste.append({"ID": str(p["id"]), "Nr.": int(p.get("number", "")) if str(p.get("number", "")).isdigit() else None, "Name": p["name"], "Rolle": p.get("role", "Spieler"), "Prio 1": pos[0] if len(pos) > 0 else "-", "Prio 2": pos[1] if len(pos) > 1 else "-", "Prio 3": pos[2] if len(pos) > 2 else "-", "Prio 4": pos[3] if len(pos) > 3 else "-", "Prio 5": pos[4] if len(pos) > 4 else "-"})
         kader_df = pd.DataFrame(kader_liste)
-        
-        if not kader_df.empty:
-            kader_df = kader_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
+        if not kader_df.empty: kader_df = kader_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
             
-        editiertes_kader = st.data_editor(
-            kader_df, 
-            hide_index=True, 
-            column_config={
-                "ID": None, 
-                "Rolle": st.column_config.SelectboxColumn(options=["Spieler", "Trainer"], required=True), 
-                "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), 
-                "Prio 1": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), 
-                "Prio 2": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), 
-                "Prio 3": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), 
-                "Prio 4": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), 
-                "Prio 5": st.column_config.SelectboxColumn(options=["-"] + POSITIONS)
-            }, 
-            num_rows="dynamic", 
-            use_container_width=True
-        )
-        
+        editiertes_kader = st.data_editor(kader_df, hide_index=True, column_config={"ID": None, "Rolle": st.column_config.SelectboxColumn(options=["Spieler", "Trainer"], required=True), "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Prio 1": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), "Prio 2": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), "Prio 3": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), "Prio 4": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), "Prio 5": st.column_config.SelectboxColumn(options=["-"] + POSITIONS)}, num_rows="dynamic", use_container_width=True)
         if st.button("💾 Alle Änderungen im Kader speichern", type="primary"):
             neuer_kader = []
             for index, row in editiertes_kader.iterrows():
                 row_id, pos_liste = row.get("ID"), []
                 for col in ["Prio 1", "Prio 2", "Prio 3", "Prio 4", "Prio 5"]:
-                    if row.get(col, "-") != "-": 
-                        pos_liste.append(row.get(col))
+                    if row.get(col, "-") != "-": pos_liste.append(row.get(col))
                 nr_str = str(int(float(row.get("Nr.")))) if pd.notna(row.get("Nr.")) else ""
                 orig = next((p for p in st.session_state.data["players"] if str(p["id"]) == str(row_id)), None) if pd.notna(row_id) else None
                 if orig:
@@ -432,7 +374,8 @@ if "🏃‍♂️ Kader" in tab_map:
                     neuer_kader.append(orig)
                 elif str(row["Name"]).strip():
                     neuer_kader.append({"id": max([p["id"] for p in neuer_kader] + [p["id"] for p in st.session_state.data["players"]] + [0]) + 1, "name": str(row["Name"]), "role": str(row["Rolle"]), "number": nr_str, "positions": pos_liste, "training": [], "matches": []})
-            st.session_state.data["players"] = neuer_kader; speichere_daten(st.session_state.data); st.success("Kader aktualisiert!"); st.rerun()
+            st.session_state.data["players"] = neuer_kader
+            if speichere_daten(st.session_state.data): st.success("Kader erfolgreich in der Cloud aktualisiert!")
 
 # --- TAB 3: SPIEL LOGGEN (NUR TRAINER) ---
 if "⚽ Spiel loggen" in tab_map:
@@ -448,41 +391,12 @@ if "⚽ Spiel loggen" in tab_map:
         for p in nur_spieler:
             planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
             default_status = "❌ Nicht in Kader" if planung == "❌ Abwesend" else ("🔵 Team Blau" if planung == "🤖 KI entscheidet" else planung)
-            spiel_liste.append({
-                "ID": str(p["id"]), 
-                "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, 
-                "Name": p["name"], 
-                "Team / Status": default_status, 
-                "⚽ Tore": 0, 
-                "Vorlagen": 0
-            })
+            spiel_liste.append({"ID": str(p["id"]), "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": default_status, "⚽ Tore": 0, "Vorlagen": 0})
         
         spiel_df = pd.DataFrame(spiel_liste)
-        if not spiel_df.empty:
-            spiel_df = spiel_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
+        if not spiel_df.empty: spiel_df = spiel_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
             
-        editiertes_spiel = st.data_editor(
-            spiel_df, 
-            disabled=["ID", "Nr.", "Name"], 
-            hide_index=True, 
-            column_config={
-                "ID": None, 
-                "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), 
-                "Team / Status": st.column_config.SelectboxColumn(
-                    options=[
-                        "🔵 Team Blau", 
-                        "🟡 Team Gelb", 
-                        "🔄 Ersatzbank", 
-                        "❌ Nicht in Kader"
-                    ], 
-                    required=True
-                ), 
-                "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), 
-                "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")
-            }, 
-            use_container_width=True
-        )
-
+        editiertes_spiel = st.data_editor(spiel_df, disabled=["ID", "Nr.", "Name"], hide_index=True, column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Team / Status": st.column_config.SelectboxColumn(options=["🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Nicht in Kader"], required=True), "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")}, use_container_width=True)
         if st.button("Spieltag speichern", type="primary"):
             if not m_opponent.strip(): st.error("Gegner fehlt!")
             else:
@@ -495,7 +409,7 @@ if "⚽ Spiel loggen" in tab_map:
                     db_team = "Blau" if status == "🔵 Team Blau" else ("Gelb" if status == "🟡 Team Gelb" else ("Ersatz" if status == "🔄 Ersatzbank" else "Abwesend"))
                     act = db_team in ["Blau", "Gelb", "Ersatz"]
                     spieler["matches"].append({"date": str(m_datum), "opponent": m_opponent.strip(), "type": m_type, "team_blau_results": r_blau, "team_gelb_results": r_gelb, "played": act, "team": db_team, "goals": int(row["⚽ Tore"]) if act else 0, "assists": int(row["Vorlagen"]) if act else 0})
-                speichere_daten(st.session_state.data); st.success("Gespeichert!"); st.rerun()
+                if speichere_daten(st.session_state.data): st.success("Spieltag erfolgreich in der Cloud archiviert!")
 
 # --- TAB 4: KI TWIN-TEAMS ---
 with tab_map["🤖 KI Twin-Teams"]:
@@ -506,37 +420,11 @@ with tab_map["🤖 KI Twin-Teams"]:
         st.markdown("#### 📋 Kader-Zuweisung")
         zuweisungs_liste = []
         for p in nur_spieler:
-            zuweisungs_liste.append({
-                "ID": str(p["id"]), 
-                "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, 
-                "Name": p["name"], 
-                "Hauptposition": p["positions"][0] if p["positions"] else "-", 
-                "Zuweisung / Status": st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
-            })
+            zuweisungs_liste.append({"ID": str(p["id"]), "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Hauptposition": p["positions"][0] if p["positions"] else "-", "Zuweisung / Status": st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")})
         df_zuweisung = pd.DataFrame(zuweisungs_liste)
-        if not df_zuweisung.empty:
-            df_zuweisung = df_zuweisung.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
+        if not df_zuweisung.empty: df_zuweisung = df_zuweisung.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
             
-        editiertes_kader_zuweisung = st.data_editor(
-            df_zuweisung, 
-            hide_index=True, 
-            disabled=["ID", "Nr.", "Name", "Hauptposition"], 
-            column_config={
-                "ID": None, 
-                "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), 
-                "Zuweisung / Status": st.column_config.SelectboxColumn(
-                    options=[
-                        "🤖 KI entscheidet", 
-                        "🔵 Team Blau", 
-                        "🟡 Team Gelb", 
-                        "🔄 Ersatzbank", 
-                        "❌ Abwesend"
-                    ], 
-                    required=True
-                )
-            }, 
-            use_container_width=True
-        )
+        editiertes_kader_zuweisung = st.data_editor(df_zuweisung, hide_index=True, disabled=["ID", "Nr.", "Name", "Hauptposition"], column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Zuweisung / Status": st.column_config.SelectboxColumn(options=["🤖 KI entscheidet", "🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Abwesend"], required=True)}, use_container_width=True)
 
     btn_col1, btn_col2 = st.columns(2)
     berechnen_klick = btn_col1.button("🤖 KI Aufstellung berechnen" if is_trainer else "⚽ Aktuelle Aufstellung laden", type="primary", use_container_width=True)
@@ -596,7 +484,6 @@ with tab_map["🤖 KI Twin-Teams"]:
             else: t_gelb[r_name] = waehle_spieler_taktik_mix(pr, "Gelb", r_name, is_alt); t_blau[r_name] = waehle_spieler_taktik_mix(pr, "Blau", r_name, is_alt)
 
         ersatz = [c for c in blau_fest + gelb_fest + ki_pool + bench_fest if c["name"] not in genutzte_namen]
-        
         b_blau_list = []
         for i, x in enumerate(ersatz):
             nr_tag = f'<span class="nr">#{x["nr"]}</span>' if x["nr"] else ""
@@ -619,7 +506,7 @@ with tab_map["🤖 KI Twin-Teams"]:
         with c_p2: st.markdown("### 🟡 Team Gelb"); st.components.v1.html(st.session_state.pitch_gelb_html, height=460)
     else: st.warning("Aufstellung muss berechnet oder geladen werden.")
 
-# --- TAB 5: SPIELERPLUS IMPORT (NUR TRAINER) ---
+# --- TAB 5: SPIELERPLUS IMPORT ---
 if "📥 Import (SpielerPlus)" in tab_map:
     with tab_map["📥 Import (SpielerPlus)"]:
         st.subheader("📥 Massen-Import (SpielerPlus CSV)")
@@ -639,17 +526,131 @@ if "📥 Import (SpielerPlus)" in tab_map:
                 if st.button("Verarbeiten", type="primary"):
                     imp = 0
                     for index, row in df_import.iterrows():
-                        p_n, p_t, p_d, p_y = str(row[name_sp]).strip(), str(row[teil_sp]).strip().lower(), str(row[dat_sp]).strip().split(" ")[0], str(row[typ_sp]).strip()
-                        anw = p_t in ["ja", "zugesagt", "anwesend", "1", "true", "yes"]
+                        p_n = str(row[name_sp]).strip()
+                        p_t = str(row[teil_sp]).strip().lower()
+                        p_d = str(row[dat_sp]).strip().split(" ")[0]
+                        p_y = str(row[typ_sp]).strip()
+                        
+                        erfolgs_woerter = ["status_confirmed", "ja", "zugesagt", "anwesend", "erschienen", "teilgenommen", "1", "true", "yes"]
+                        anw = any(wort in p_t for wort in erfolgs_woerter)
+                        
                         sp = next((x for x in st.session_state.data["players"] if p_n.lower() in x["name"].lower() or x["name"].lower() in p_n.lower()), None)
-                        if not sp: sp = {"id": max([x["id"] for x in st.session_state.data["players"]]+[0])+1, "name": p_n, "role": "Spieler", "number": "", "positions": ["ZM"], "training": [], "matches": []}; st.session_state.data["players"].append(sp)
-                        if not any(t.get('date') == p_d and t.get('type') == p_y for t in sp.get("training", [])):
-                            if "training" not in sp: sp["training"] = []
-                            sp["training"].append({"date": p_d, "type": p_y, "present": anw}); imp += 1
-                    speichere_daten(st.session_state.data); st.success(f"{imp} Einträge importiert!"); st.rerun()
+                        if not sp: 
+                            sp = {"id": max([x["id"] for x in st.session_state.data["players"]]+[0])+1, "name": p_n, "role": "Spieler", "number": "", "positions": ["ZM"], "training": [], "matches": []}
+                            st.session_state.data["players"].append(sp)
+                        
+                        if "training" not in sp: sp["training"] = []
+                        bestehender_eintrag = next((t for t in sp["training"] if t.get('date') == p_d and t.get('type') == p_y), None)
+                        if bestehender_eintrag: bestehender_eintrag["present"] = anw
+                        else: sp["training"].append({"date": p_d, "type": p_y, "present": anw})
+                        imp += 1
+                    
+                    if speichere_daten(st.session_state.data):
+                        st.toast("🎉 Daten erfolgreich aktualisiert!", icon="🚀")
+                        st.success(f"🎉 Erfolg! {imp} Einträge wurden verarbeitet.")
             except Exception as e: st.error(f"Fehler: {e}")
 
-# --- TAB 6: LIGA-ZENTRALE ---
+# --- 📋 TAB 6: TRAININGSPLANER (JETZT MIT DIREKTEM PDF & GOOGLE DRIVE SUPPORT) ---
+with tab_map["📋 Trainingsplaner"]:
+    st.subheader("📋 Interaktiver Alsterbrüder 5-Phasen-Trainingsplaner")
+    
+    planer_sub_tabs = ["⚽ Einheit generieren", "🗂️ Übungsdatenbank verwalten"]
+    p_tab_gen, p_tab_db = st.tabs(planer_sub_tabs)
+    
+    # REITER A: GENERATOR
+    with p_tab_gen:
+        st.markdown("#### 🤖 Nächste Trainingseinheit zusammenwürfeln")
+        alle_schwerpunkte = sorted(list(set(u.get("schwerpunkt", "Allgemein") for u in st.session_state.data["exercises"])))
+        if not alle_schwerpunkte: alle_schwerpunkte = ["Passspiel", "Torschuss", "Umschalten", "Defensive"]
+            
+        gewaehlter_schwerpunkt = st.selectbox("Fokus/Schwerpunkt für das heutige Training:", alle_schwerpunkte)
+        
+        if st.button("🎲 Einheit auswürfeln", type="primary"):
+            generierter_plan = {}
+            for phase in TRAINING_PHASES:
+                pool = [u for u in st.session_state.data["exercises"] if u["phase"] == phase]
+                schwerpunkt_pool = [u for u in pool if u.get("schwerpunkt", "").lower() == gewaehlter_schwerpunkt.lower()]
+                
+                finaler_pool = schwerpunkt_pool if schwerpunkt_pool else pool
+                if finaler_pool:
+                    generierter_plan[phase] = random.choice(finaler_pool)
+            st.session_state.aktueller_trainingsplan = generierter_plan
+            
+        if "aktueller_trainingsplan" in st.session_state:
+            st.success(f"🔥 Fertig! Deine 5-Phasen-Einheit steht. Schwerpunkt: **{gewaehlter_schwerpunkt}**")
+            for phase in TRAINING_PHASES:
+                if phase in st.session_state.aktueller_trainingsplan:
+                    u = st.session_state.aktueller_trainingsplan[phase]
+                    with st.expander(f"➔ {phase}: {u['name']} ({u.get('spieler', 'Alle')} Spieler)", expanded=True):
+                        col_text, col_gfx = st.columns([1, 1])
+                        with col_text:
+                            st.markdown(f"**🎯 Schwerpunkt:** {u.get('schwerpunkt', '-')}")
+                            st.markdown(f"**🛠️ Aufbau & Regeln:**\n{u['aufbau']}")
+                        with col_gfx:
+                            # ⚡ HIER IST DIE SYSTEMRETTUNG: Intelligente Unterscheidung der Medien
+                            gfx_url = u.get("grafik", "").strip()
+                            if gfx_url:
+                                if "docs.google.com/presentation" in gfx_url:
+                                    # Google Slides Embed
+                                    st.components.v1.html(f'<iframe src="{gfx_url}" frameborder="0" width="100%" height="220" allowfullscreen="true"></iframe>', height=230)
+                                elif "drive.google.com" in gfx_url or gfx_url.lower().endswith(".pdf"):
+                                    # Google Drive Vorschau (dein Link!) & eigenständige PDFs
+                                    st.components.v1.html(f'<iframe src="{gfx_url}" width="100%" height="280" style="border:none;" allowfullscreen="true"></iframe>', height=290)
+                                else:
+                                    # Klassische Bild-URL
+                                    st.image(gfx_url, caption="Übungsgrafik", use_container_width=True)
+                            else:
+                                st.info("Keine Grafik hinterlegt. Kann in der Datenbank hinzugefügt werden.")
+                else:
+                    st.warning(f"Für die Phase '{phase}' wurde keine passende Übung gefunden.")
+        else:
+            st.info("Klicke auf den Button oben, um dein Training generieren zu lassen!")
+
+    # REITER B: DATENBANK-VERWALTUNG
+    with p_tab_db:
+        st.markdown("#### 🗂️ Eure Übungssammlung")
+        
+        if is_trainer:
+            with st.expander("➕ Neue Übung zur Liste hinzufügen", expanded=False):
+                with st.form("neue_uebung_form"):
+                    u_name = st.text_input("Name der Übung:", placeholder="z.B. 3-Farben-Turnier")
+                    u_phase = st.selectbox("Trainings-Phase:", TRAINING_PHASES)
+                    u_focus = st.text_input("Schwerpunkt (Tag):", placeholder="z.B. Passspiel, Torschuss, Gegenpressing")
+                    u_players = st.text_input("Spieleranzahl / Organisation:", placeholder="z.B. 4v4 + 2 neutrale")
+                    u_setup = st.text_area("Aufbau, Ablauf und Coaching-Punkte:")
+                    u_gfx = st.text_input("Google Slides Embed-Link / Google Drive PDF-Vorschau:", help="Füge hier deinen .../preview Link ein.")
+                    
+                    if st.form_submit_button("💾 Übung dauerhaft speichern", type="primary"):
+                        if not u_name.strip(): st.error("Der Name der Übung fehlt!")
+                        else:
+                            neue_id = max([x["id"] for x in st.session_state.data["exercises"]] + [0]) + 1
+                            st.session_state.data["exercises"].append({"id": neue_id, "name": u_name.strip(), "phase": u_phase, "schwerpunkt": u_focus.strip(), "spieler": u_players.strip(), "aufbau": u_setup.strip(), "grafik": u_gfx.strip()})
+                            if speichere_daten(st.session_state.data): st.success(f"Übung '{u_name}' erfolgreich hinzugefügt!"); st.rerun()
+        
+        if st.session_state.data["exercises"]:
+            ex_df = pd.DataFrame(st.session_state.data["exercises"])
+            editiere_db = st.data_editor(ex_df, disabled=["id"], hide_index=True, column_config={"id": None, "name": st.column_config.TextColumn("Übungsname"), "phase": st.column_config.SelectboxColumn("Phase", options=TRAINING_PHASES), "schwerpunkt": st.column_config.TextColumn("Fokus"), "spieler": st.column_config.TextColumn("Spieler"), "aufbau": st.column_config.TextColumn("Beschreibung"), "grafik": st.column_config.TextColumn("Grafik-Link")}, use_container_width=True, num_rows="dynamic" if is_trainer else "fixed")
+            
+            if is_trainer and st.button("💾 Tabellen-Änderungen in der Datenbank sichern"):
+                neue_liste = []
+                for index, row in editiere_db.iterrows():
+                    if str(row["name"]).strip():
+                        neue_liste.append({"id": int(row["id"]) if pd.notna(row["id"]) else random.randint(1000,9999), "name": str(row["name"]), "phase": str(row["phase"]), "schwerpunkt": str(row["schwerpunkt"]), "spieler": str(row["spieler"]), "aufbau": str(row["aufbau"]), "grafik": str(row["grafik"])})
+                st.session_state.data["exercises"] = neue_liste
+                if speichere_daten(st.session_state.data): st.success("Übungsdatenbank aktualisiert!"); st.rerun()
+        else:
+            st.info("Aktuell befinden sich noch keine Übungen in eurer Sammlung.")
+
+        # 💥 Gefahrenzone zum Löschen aller Übungsdaten
+        if is_trainer:
+            st.write("")
+            st.divider()
+            st.markdown("### ⚠️ Gefahrenzone")
+            if st.button("💥 Alle Trainingsübungen unwiderruflich löschen", type="secondary"):
+                st.session_state.data["exercises"] = []
+                if speichere_daten(st.session_state.data): st.success("Die gesamte Übungsdatenbank wurde geleert!"); st.rerun()
+
+# --- TAB 7: LIGA-ZENTRALE ---
 with tab_map["🏆 Liga-Tabelle"]:
     st.subheader("🏆 Liga-Zentrale (U12 Bezirksliga 36)")
     st.link_button("🌐 Offizielle fussball.de Tabelle öffnen", "https://www.fussball.de/spieltagsuebersicht/u12-bzl-36-fruehjahr-bezirksebene-hamburg-d-junioren-bezirksliga-d-junioren-saison2526-hamburg/-/staffel/0306E7FA78000005VS5489BUVV5FEO72-G#!/", type="primary")
