@@ -19,8 +19,8 @@ POSITIONS = [
 ]
 
 # 🌍 HIER DEINE KOPIERTE GOOGLE GOOGLE APPS SCRIPT URL EINTRAGEN:
-# (Solange das Feld leer ist, nutzt die App automatisch die lokale JSON-Datei weiter!)
-API_URL = ""
+# (Denk dran, deinen /exec Link hier wieder einzufügen!)
+API_URL = "https://script.google.com/macros/s/AKfycbwC5946xV9qMBEiTkPYTt1sqP0n0ohPN_n2QqA1nPWurK63_QYs9WiTwUNIN2J0Qs9MPA/exec"
 
 # --- SIDEBAR: PASSWORT-SCHUTZ (TRAINER VS. ELTERN) ---
 with st.sidebar:
@@ -125,8 +125,13 @@ def speichere_daten(data):
     with open(DATA_FILE, "w", encoding="utf-8") as f:
         json.dump(data, f, indent=4)
 
+# --- INITIALISIERUNG DER SPEICHERRÄUME ---
 if "data" not in st.session_state:
     st.session_state.data = lade_daten()
+
+# 🧠 HIER IST DIE REPARATUR: Zuweisungs-Speicher für die KI von Sekunde 1 an bereitstellen
+if "zuweisungen" not in st.session_state:
+    st.session_state.zuweisungen = {}
 
 # --- LOGIK: STATISTIKEN BERECHNEN ---
 def berechne_statistiken(spieler, erlaubte_typen=None):
@@ -429,7 +434,7 @@ if "🏃‍♂️ Kader" in tab_map:
                     neuer_kader.append({"id": max([p["id"] for p in neuer_kader] + [p["id"] for p in st.session_state.data["players"]] + [0]) + 1, "name": str(row["Name"]), "role": str(row["Rolle"]), "number": nr_str, "positions": pos_liste, "training": [], "matches": []})
             st.session_state.data["players"] = neuer_kader; speichere_daten(st.session_state.data); st.success("Kader aktualisiert!"); st.rerun()
 
-# --- TAB 3: SPIEL LOGGEN (NUR TRAINER - JETZT COMPILER-ABGESICHERT ENTZERRT) ---
+# --- TAB 3: SPIEL LOGGEN (NUR TRAINER) ---
 if "⚽ Spiel loggen" in tab_map:
     with tab_map["⚽ Spiel loggen"]:
         st.subheader("⚽ Spieltag Statistiken loggen")
@@ -441,7 +446,7 @@ if "⚽ Spiel loggen" in tab_map:
         st.divider(); nur_spieler = [p for p in st.session_state.data["players"] if p.get("role", "Spieler") == "Spieler"]
         spiel_liste = []
         for p in nur_spieler:
-            planung = st.session_state.get("zuweisungen", {}).get(str(p["id"]), "🤖 KI entscheidet")
+            planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
             default_status = "❌ Nicht in Kader" if planung == "❌ Abwesend" else ("🔵 Team Blau" if planung == "🤖 KI entscheidet" else planung)
             spiel_liste.append({
                 "ID": str(p["id"]), 
@@ -456,7 +461,6 @@ if "⚽ Spiel loggen" in tab_map:
         if not spiel_df.empty:
             spiel_df = spiel_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
             
-        # ⚡ Hier lag die Abschneidung von Zeile 384! Komplett mehrzeilig restauriert:
         editiertes_spiel = st.data_editor(
             spiel_df, 
             disabled=["ID", "Nr.", "Name"], 
@@ -493,7 +497,7 @@ if "⚽ Spiel loggen" in tab_map:
                     spieler["matches"].append({"date": str(m_datum), "opponent": m_opponent.strip(), "type": m_type, "team_blau_results": r_blau, "team_gelb_results": r_gelb, "played": act, "team": db_team, "goals": int(row["⚽ Tore"]) if act else 0, "assists": int(row["Vorlagen"]) if act else 0})
                 speichere_daten(st.session_state.data); st.success("Gespeichert!"); st.rerun()
 
-# --- TAB 4: KI TWIN-TEAMS (EBENFALLS VOLLSTÄNDIG ENTZERRT GEGEN TRUNCATION) ---
+# --- TAB 4: KI TWIN-TEAMS ---
 with tab_map["🤖 KI Twin-Teams"]:
     st.subheader("🤖 KI Twin-Aufstellung")
     nur_spieler = [p for p in st.session_state.data["players"] if p.get("role", "Spieler") == "Spieler"]
@@ -513,7 +517,6 @@ with tab_map["🤖 KI Twin-Teams"]:
         if not df_zuweisung.empty:
             df_zuweisung = df_zuweisung.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
             
-        # ⚡ Auch diese verdeckte Riesen-Zeile ist jetzt sauber zerlegt:
         editiertes_kader_zuweisung = st.data_editor(
             df_zuweisung, 
             hide_index=True, 
