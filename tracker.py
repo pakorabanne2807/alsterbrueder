@@ -339,7 +339,6 @@ if selected_tab == "📊 Übersicht":
 
 # --- 🔍 TAB 2: SPIELER-PROFILE (U13 UPDATE & RESPONSIVE DESIGN) ---
 if selected_tab == "🔍 Spieler-Profile":
-    # ⚽ JETZT SAUBER ALS U13 TITULIERT:
     st.subheader("🔍 Alsterbrüder Spieler-Profile & FUT-Cards")
     if not nur_spieler:
         st.info("Keine Spieler im Kader hinterlegt.")
@@ -433,7 +432,7 @@ if selected_tab == "🔍 Spieler-Profile":
 if selected_tab == "📖 Spielübersicht":
     st.subheader("📖 Historische Spielübersicht")
     spiele_set = set()
-    for p in st.session_state.data["players"]:
+    for p in nur_spieler:
         for m in p.get("matches", []):
             if m.get("opponent", "Unbekannt") != "Unbekannt": spiele_set.add((m.get("date", "Unbekannt"), m.get("opponent", "Unbekannt"), m.get("type", "Spiel")))
     spiele_liste = sorted(list(spiele_set), key=lambda x: x[0], reverse=True)
@@ -443,7 +442,7 @@ if selected_tab == "📖 Spielübersicht":
         gewaehltes_spiel_idx = st.selectbox("Wähle ein Match aus:", range(len(spiele_liste)), format_func=lambda i: f"📅 {spiele_liste[i][0]} | [{spiele_liste[i][2]}] gegen {spiele_liste[i][1]}")
         sel_datum, sel_gegner, sel_art = spiele_liste[gewaehltes_spiel_idx]
         sel_res_blau, sel_res_gelb = ["-"]*4, ["-"]*4
-        for p in st.session_state.data["players"]:
+        for p in nur_spieler:
             p_match = next((m for m in p.get("matches", []) if m.get("date") == sel_datum and m.get("opponent") == sel_gegner), None)
             if p_match:
                 sel_res_blau = p_match.get("team_blau_results", p_match.get("team_a_results", ["-"]*4))
@@ -460,13 +459,12 @@ if selected_tab == "📖 Spielübersicht":
             txt_gelb = " | ".join([f'<b>Sp. {i+1}:</b> {r}' for i, r in enumerate(sel_res_gelb)])
             st.markdown(f"<div style='background-color:#fffbef; border-left:4px solid #b45309; padding:8px; border-radius:4px;'>{txt_gelb}</div>", unsafe_allow_html=True)
         match_details = []
-        for p in st.session_state.data["players"]:
-            if p.get("role", "Spieler") == "Spieler":
-                p_match = next((m for m in p.get("matches", []) if m.get("date") == sel_datum and m.get("opponent") == sel_gegner), None)
-                if p_match:
-                    t_val = p_match.get("team", "Blau" if p_match.get("played", True) else "Abwesend")
-                    lbl = "🔵 Team Blau" if t_val == "Blau" else ("🟡 Team Gelb" if t_val == "Gelb" else ("🔄 Ersatzbank" if t_val == "Ersatz" else "❌ Nicht im Kader"))
-                    match_details.append({"Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": lbl, "⚽ Tore": p_match.get("goals", 0), "Vorlagen": p_match.get("assists", 0)})
+        for p in nur_spieler:
+            p_match = next((m for m in p.get("matches", []) if m.get("date") == sel_datum and m.get("opponent") == sel_gegner), None)
+            if p_match:
+                t_val = p_match.get("team", "Blau" if p_match.get("played", True) else "Abwesend")
+                lbl = "🔵 Team Blau" if t_val == "Blau" else ("🟡 Team Gelb" if t_val == "Gelb" else ("🔄 Ersatzbank" if t_val == "Ersatz" else "❌ Nicht im Kader"))
+                match_details.append({"Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": lbl, "⚽ Tore": p_match.get("goals", 0), "Vorlagen": p_match.get("assists", 0)})
         if match_details:
             df_details = pd.DataFrame(match_details).sort_values(by=["Team / Status", "Nr."], ascending=[True, True], na_position="last").reset_index(drop=True)
             st.write("")
@@ -632,7 +630,9 @@ if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
                     p_n, p_t, p_d, p_y = str(row[name_sp]).strip(), str(row[tail_sp]).strip().lower(), str(row[dat_sp]).strip().split(" ")[0], str(row[typ_sp]).strip()
                     erfolgs_woerter = ["status_confirmed", "ja", "zugesagt", "anwesend", "erschienen", "teilgenommen", "1", "true", "yes"]
                     anw = any(wort in p_t for wort in erfolgs_woerter)
-                    sp = next((x for x in st.session_state.data["players"] if p_n.lower() in x["name"].lower() or x["name"].lower() in p_n.lower()), None)
+                    
+                    # 🎯 DER GEWÜNSCHTE EXAKTE FIX: Vergleich mit == statt "in" verhindert Überschneidungen (Emil / Emilio)
+                    sp = next((x for x in st.session_state.data["players"] if p_n.lower() == x["name"].lower()), None)
                     if not sp: 
                         sp = {"id": max([x["id"] for x in st.session_state.data["players"]]+[0])+1, "name": p_n, "role": "Spieler", "number": "", "positions": ["ZM"], "training": [], "matches": []}
                         st.session_state.data["players"].append(sp)
