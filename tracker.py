@@ -6,8 +6,12 @@ import re  # Für die präzise JSON-Extraktion
 from datetime import datetime
 import random
 import requests
+import threading  # Für das pfeilschnelle Speichern im Hintergrund
 import plotly.express as px
 import plotly.graph_objects as go  # Für das FUT-Radar-Chart
+from PIL import Image, ImageDraw
+import io
+import base64
 
 # --- GEMINI KI PAKET IMPORTER ---
 try:
@@ -35,18 +39,21 @@ TRAINING_PHASES = [
     "5. Abschlussspiel"
 ]
 
-# 🌍 GOOGLE CLOUD URL:
-API_URL = "https://script.google.com/macros/s/AKfycbwC5946xV9qMBEiTkPYTt1sqP0n0ohPN_n2QqA1nPWurK63_QYs9WiTwUNIN2J0Qs9MPA/exec"
-
-# --- UN SICHTBARE HINTERGRUND-HOLUNG DES GEMINI-KEYS ---
-def get_background_gemini_key():
-    """Liest den API-Key sicher und unsichtbar aus den Streamlit Secrets oder Systemvariablen."""
+# --- SICHERE HOLUNG DER SENSIBLEN DATEN (SECRETS / ENV) ---
+def get_secret_value(key_name, default_val=""):
     try:
-        if "GEMINI_API_KEY" in st.secrets:
-            return st.secrets["GEMINI_API_KEY"].strip()
+        if key_name in st.secrets:
+            return str(st.secrets[key_name]).strip()
     except Exception:
         pass
-    return os.environ.get("GEMINI_API_KEY", "").strip()
+    return os.environ.get(key_name, default_val).strip()
+
+# 🌍 DYNAMISCHE STRUKTUR FÜR SCHLÜSSEL & CLOUD-URL
+API_URL = get_secret_value("API_URL", "")
+GEMINI_API_KEY = get_secret_value("GEMINI_API_KEY", "")
+
+def get_background_gemini_key():
+    return get_secret_value("GEMINI_API_KEY", GEMINI_API_KEY)
 
 # --- HILFSFUNKTIONEN ---
 def sind_verwandt(pos1, pos2):
@@ -64,9 +71,443 @@ def berechne_level(punkte):
     elif punkte >= 50: return "🔵 Stammspieler"
     else: return "🟢 Jugend-Rookie"
 
+# --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
+def render_html5_taktikboard():
+    html_code = """
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; background: #f8fafc; }
+        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; align-items: center; background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; }
+        .controls label { font-size: 13px; font-weight: bold; color: #334155; }
+        .controls select, .controls button { padding: 6px 12px; border-radius: 6px; border: 1px solid #94a3b8; font-size: 13px; cursor: pointer; }
+        .btn-primary { background: #1e3a8a; color: white; font-weight: bold; border: none; }
+        .btn-success { background: #16a34a; color: white; font-weight: bold; border: none; }
+        .btn-danger { background: #ef4444; color: white; border: none; font-weight: bold; }
+        .status-bar { font-size: 12.5px; font-weight: bold; color: #1e3a8a; background: #f0fdf4; padding: 7px 12px; border-radius: 6px; margin-bottom: 8px; border: 1px solid #bbf7d0; }
+        #board-container { position: relative; width: 550px; height: 380px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; overflow: hidden; }
+        canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+    </style>
+    </head>
+    <body>
+
+    <div class="controls">
+        <div>
+            <label>Spielfeld:</label>
+            <select id="templateSelect" onchange="resetPitch()">
+                <option value="Eckball">Eckball-Fokus (Tor & 16m)</option>
+                <option value="Halbfeld">Halbfeld-Fokus (Freistoß)</option>
+            </select>
+        </div>
+        <div>
+            <label>Farbe:</label>
+            <select id="colorSelect">
+                <option value="#facc15">🟡 Unser Spieler (Gelb)</option>
+                <option value="#ef4444">🔴 Gegner (Rot)</option>
+                <option value="#000000">⬛ Torwart TW (Schwarz)</option>
+                <option value="#ffffff">⚪ Pass / Laufweg / Bogen (Weiß)</option>
+            </select>
+        </div>
+        <div>
+            <label>Werkzeug:</label>
+            <select id="toolSelect" onchange="onToolChange()">
+                <option value="dot">🟡 Spieler-Punkt setzen</option>
+                <option value="curve">➰ Flugkurve (3-Klick Bogen)</option>
+                <option value="line">📏 Gerader Pass (Linie)</option>
+                <option value="dashed">🏁 Gestrichelter Laufweg</option>
+                <option value="move">✋ Verschieben / Bewegen (Magnete)</option>
+            </select>
+        </div>
+        <button class="btn-danger" onclick="undoLast()">↩️ Rückgängig</button>
+        <button class="btn-danger" onclick="clearDrawings()">🗑️ Leeren</button>
+        <button class="btn-success" onclick="downloadSketch()">📸 Skizze als Bild speichern</button>
+    </div>
+
+    <div id="statusBar" class="status-bar">💡 Werkzeug gewählt. Klicke auf das Feld.</div>
+
+    <div id="board-container">
+        <canvas id="pitchCanvas" width="550" height="380"></canvas>
+        <canvas id="drawCanvas" width="550" height="380"></canvas>
+    </div>
+
+    <script>
+        const pitchCanvas = document.getElementById('pitchCanvas');
+        const pitchCtx = pitchCanvas.getContext('2d');
+        const drawCanvas = document.getElementById('drawCanvas');
+        const drawCtx = drawCanvas.getContext('2d');
+        const statusBar = document.getElementById('statusBar');
+
+        let shapes = []; 
+        let history = []; 
+        
+        let curveStep = 0;
+        let curveP0 = {x: 0, y: 0};
+        let curveP2 = {x: 0, y: 0};
+
+        let isDragging = false;
+        let dragTarget = null; 
+        let isLineDrawing = false;
+        let lineStart = {x: 0, y: 0};
+
+        function updateStatus() {
+            const tool = document.getElementById('toolSelect').value;
+            if (tool === 'curve') {
+                if (curveStep === 0) statusBar.innerText = "🎯 Flugkurve: 1. Klick = STARTPUNKT des Balls setzen.";
+                else if (curveStep === 1) statusBar.innerText = "🎯 Flugkurve: 2. Klick = ZIELPUNKT des Balls setzen.";
+                else if (curveStep === 2) statusBar.innerText = "🎯 Flugkurve: Bewege die Maus für den Bogen & klicke zum FIXIEREN!";
+            } else if (tool === 'dot') {
+                statusBar.innerText = "🟡 Spieler: Klicke auf das Feld, um einen gelben/roten Punkt zu setzen.";
+            } else if (tool === 'line' || tool === 'dashed') {
+                statusBar.innerText = "📏 Pass/Laufweg: Drücke & ziehe die Maus vom Start- zum Zielpunkt.";
+            } else if (tool === 'move') {
+                statusBar.innerText = "🧲 Verschieben: Klicke auf einen Punkt, Linie oder Kurve und ziehe sie an die gewünschte Stelle!";
+            }
+        }
+
+        function onToolChange() {
+            curveStep = 0;
+            updateStatus();
+            redrawAll();
+        }
+
+        function drawPitch() {
+            const type = document.getElementById('templateSelect').value;
+            const w = 550, h = 380;
+            
+            // Rasengrün
+            pitchCtx.fillStyle = "#2e7d32";
+            pitchCtx.fillRect(0, 0, w, h);
+            
+            // Rasenstreifen
+            pitchCtx.fillStyle = "#388e3c";
+            for(let i=0; i<w; i+=50) {
+                if((i/50)%2 === 0) pitchCtx.fillRect(i, 0, 50, h);
+            }
+
+            pitchCtx.strokeStyle = "#ffffff";
+            pitchCtx.lineWidth = 3;
+
+            if(type === "Eckball") {
+                const goalLineY = 350;
+                const penaltyBoxTopY = 180;
+                const penaltySpotY = 250;
+                const centerX = 275;
+
+                pitchCtx.beginPath(); pitchCtx.moveTo(30, goalLineY); pitchCtx.lineTo(w-30, goalLineY); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.moveTo(30, 30); pitchCtx.lineTo(30, goalLineY); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.moveTo(w-30, 30); pitchCtx.lineTo(w-30, goalLineY); pitchCtx.stroke();
+                
+                pitchCtx.strokeRect(100, penaltyBoxTopY, 350, 170);
+                pitchCtx.strokeRect(180, 290, 190, 60);
+                
+                pitchCtx.fillStyle = "#e2e8f0";
+                pitchCtx.fillRect(210, goalLineY, 130, 18);
+                pitchCtx.strokeRect(210, goalLineY, 130, 18);
+                
+                pitchCtx.fillStyle = "#ffffff";
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, 4, 0, Math.PI*2); pitchCtx.fill();
+                
+                const alpha = Math.acos(70 / 95);
+                pitchCtx.beginPath();
+                pitchCtx.arc(centerX, penaltySpotY, 95, 1.5 * Math.PI - alpha, 1.5 * Math.PI + alpha);
+                pitchCtx.stroke();
+
+                pitchCtx.beginPath(); pitchCtx.arc(30, goalLineY, 18, -Math.PI/2, 0); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.arc(w-30, goalLineY, 18, Math.PI, Math.PI*1.5); pitchCtx.stroke();
+            } else {
+                const goalLineY = 350;
+                const penaltyBoxTopY = 210;
+                const penaltySpotY = 275;
+                const centerX = 275;
+
+                pitchCtx.strokeRect(30, 30, w-60, h-60);
+                pitchCtx.beginPath(); pitchCtx.moveTo(30, 30); pitchCtx.lineTo(w-30, 30); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, 30, 65, 0, Math.PI); pitchCtx.stroke();
+                pitchCtx.fillStyle = "#ffffff";
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, 30, 4, 0, Math.PI*2); pitchCtx.fill();
+
+                pitchCtx.strokeRect(115, penaltyBoxTopY, 320, 140);
+                pitchCtx.strokeRect(190, 305, 170, 45);
+                
+                pitchCtx.fillStyle = "#e2e8f0";
+                pitchCtx.fillRect(220, goalLineY, 110, 14);
+                pitchCtx.strokeRect(220, goalLineY, 110, 14);
+
+                pitchCtx.fillStyle = "#ffffff";
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, 4, 0, Math.PI*2); pitchCtx.fill();
+                
+                const alpha2 = Math.acos(65 / 85);
+                pitchCtx.beginPath();
+                pitchCtx.arc(centerX, penaltySpotY, 85, 1.5 * Math.PI - alpha2, 1.5 * Math.PI + alpha2);
+                pitchCtx.stroke();
+            }
+        }
+
+        function resetPitch() {
+            drawPitch();
+            curveStep = 0;
+            updateStatus();
+        }
+
+        function drawArrowHead(ctx, fromX, fromY, toX, toY, color) {
+            const headlen = 13;
+            const dx = toX - fromX;
+            const dy = toY - fromY;
+            const angle = Math.atan2(dy, dx);
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(toX, toY);
+            ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
+            ctx.closePath();
+            ctx.fill();
+        }
+
+        function redrawAll() {
+            drawCtx.clearRect(0, 0, 550, 380);
+            const tool = document.getElementById('toolSelect').value;
+
+            shapes.forEach(s => {
+                drawCtx.strokeStyle = s.color;
+                drawCtx.fillStyle = s.color;
+
+                if (s.type === 'dot') {
+                    drawCtx.beginPath();
+                    drawCtx.arc(s.x, s.y, 11, 0, Math.PI * 2);
+                    drawCtx.fill();
+                    drawCtx.strokeStyle = "#ffffff";
+                    drawCtx.lineWidth = 2;
+                    drawCtx.stroke();
+                } else if (s.type === 'line' || s.type === 'dashed') {
+                    drawCtx.lineWidth = 4;
+                    drawCtx.setLineDash(s.type === 'dashed' ? [8, 6] : []);
+                    drawCtx.beginPath();
+                    drawCtx.moveTo(s.x1, s.y1);
+                    drawCtx.lineTo(s.x2, s.y2);
+                    drawCtx.stroke();
+                    drawCtx.setLineDash([]);
+                    drawArrowHead(drawCtx, s.x1, s.y1, s.x2, s.y2, s.color);
+                } else if (s.type === 'curve') {
+                    drawCtx.lineWidth = 4;
+                    drawCtx.beginPath();
+                    drawCtx.moveTo(s.x0, s.y0);
+                    drawCtx.quadraticCurveTo(s.cx, s.cy, s.x2, s.y2);
+                    drawCtx.stroke();
+                    drawArrowHead(drawCtx, s.cx, s.cy, s.x2, s.y2, s.color);
+                }
+
+                if (tool === 'move') {
+                    drawCtx.strokeStyle = "#facc15";
+                    drawCtx.lineWidth = 2;
+                    if (s.type === 'dot') {
+                        drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 15, 0, Math.PI * 2); drawCtx.stroke();
+                    } else if (s.type === 'curve') {
+                        drawCtx.beginPath(); drawCtx.arc(s.cx, s.cy, 7, 0, Math.PI * 2); drawCtx.stroke();
+                        drawCtx.beginPath(); drawCtx.arc(s.x0, s.y0, 6, 0, Math.PI * 2); drawCtx.stroke();
+                        drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 6, 0, Math.PI * 2); drawCtx.stroke();
+                    } else if (s.type === 'line' || s.type === 'dashed') {
+                        drawCtx.beginPath(); drawCtx.arc(s.x1, s.y1, 6, 0, Math.PI * 2); drawCtx.stroke();
+                        drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 6, 0, Math.PI * 2); drawCtx.stroke();
+                    }
+                }
+            });
+        }
+
+        function saveSnapshot() {
+            history.push(JSON.parse(JSON.stringify(shapes)));
+        }
+
+        function undoLast() {
+            curveStep = 0;
+            if (history.length > 0) {
+                shapes = history.pop();
+                redrawAll();
+            }
+            updateStatus();
+        }
+
+        function clearDrawings() {
+            curveStep = 0;
+            shapes = [];
+            history = [];
+            drawCtx.clearRect(0, 0, 550, 380);
+            updateStatus();
+        }
+
+        function getPos(e) {
+            const rect = drawCanvas.getBoundingClientRect();
+            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
+        }
+
+        function getHitHandle(pos) {
+            for (let i = shapes.length - 1; i >= 0; i--) {
+                let s = shapes[i];
+                if (s.type === 'dot') {
+                    if (Math.hypot(s.x - pos.x, s.y - pos.y) <= 18) {
+                        return { shape: s, handle: 'center' };
+                    }
+                } else if (s.type === 'line' || s.type === 'dashed') {
+                    if (Math.hypot(s.x1 - pos.x, s.y1 - pos.y) <= 16) return { shape: s, handle: 'start' };
+                    if (Math.hypot(s.x2 - pos.x, s.y2 - pos.y) <= 16) return { shape: s, handle: 'end' };
+                } else if (s.type === 'curve') {
+                    if (Math.hypot(s.x0 - pos.x, s.y0 - pos.y) <= 16) return { shape: s, handle: 'start' };
+                    if (Math.hypot(s.cx - pos.x, s.cy - pos.y) <= 18) return { shape: s, handle: 'control' };
+                    if (Math.hypot(s.x2 - pos.x, s.y2 - pos.y) <= 16) return { shape: s, handle: 'end' };
+                }
+            }
+            return null;
+        }
+
+        function downloadSketch() {
+            const combinedCanvas = document.createElement('canvas');
+            combinedCanvas.width = 550;
+            combinedCanvas.height = 380;
+            const combCtx = combinedCanvas.getContext('2d');
+            combCtx.drawImage(pitchCanvas, 0, 0);
+            combCtx.drawImage(drawCanvas, 0, 0);
+
+            const link = document.createElement('a');
+            link.download = 'taktik_skizze.png';
+            link.href = combinedCanvas.toDataURL('image/png');
+            link.click();
+        }
+
+        drawCanvas.addEventListener('mousedown', (e) => {
+            const pos = getPos(e);
+            const tool = document.getElementById('toolSelect').value;
+            const color = document.getElementById('colorSelect').value;
+
+            if (tool === 'move') {
+                const hit = getHitHandle(pos);
+                if (hit) {
+                    saveSnapshot();
+                    isDragging = true;
+                    dragTarget = hit;
+                }
+            } 
+            else if (tool === 'dot') {
+                saveSnapshot();
+                shapes.push({ type: 'dot', x: pos.x, y: pos.y, color: color });
+                redrawAll();
+            } 
+            else if (tool === 'curve') {
+                if (curveStep === 0) {
+                    curveP0 = pos;
+                    curveStep = 1;
+                    updateStatus();
+                } else if (curveStep === 1) {
+                    curveP2 = pos;
+                    curveStep = 2;
+                    updateStatus();
+                } else if (curveStep === 2) {
+                    saveSnapshot();
+                    shapes.push({
+                        type: 'curve',
+                        x0: curveP0.x, y0: curveP0.y,
+                        cx: pos.x, cy: pos.y,
+                        x2: curveP2.x, y2: curveP2.y,
+                        color: color
+                    });
+                    curveStep = 0;
+                    updateStatus();
+                    redrawAll();
+                }
+            } 
+            else if (tool === 'line' || tool === 'dashed') {
+                isLineDrawing = true;
+                lineStart = pos;
+            }
+        });
+
+        drawCanvas.addEventListener('mousemove', (e) => {
+            const pos = getPos(e);
+            const tool = document.getElementById('toolSelect').value;
+            const color = document.getElementById('colorSelect').value;
+
+            if (isDragging && dragTarget) {
+                const s = dragTarget.shape;
+                const h = dragTarget.handle;
+                if (s.type === 'dot') {
+                    s.x = pos.x; s.y = pos.y;
+                } else if (s.type === 'line' || s.type === 'dashed') {
+                    if (h === 'start') { s.x1 = pos.x; s.y1 = pos.y; }
+                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; }
+                } else if (s.type === 'curve') {
+                    if (h === 'start') { s.x0 = pos.x; s.y0 = pos.y; }
+                    else if (h === 'control') { s.cx = pos.x; s.cy = pos.y; }
+                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; }
+                }
+                redrawAll();
+            } 
+            else if (tool === 'curve') {
+                if (curveStep === 1) {
+                    redrawAll();
+                    drawCtx.strokeStyle = color;
+                    drawCtx.lineWidth = 2;
+                    drawCtx.setLineDash([4, 4]);
+                    drawCtx.beginPath();
+                    drawCtx.moveTo(curveP0.x, curveP0.y);
+                    drawCtx.lineTo(pos.x, pos.y);
+                    drawCtx.stroke();
+                    drawCtx.setLineDash([]);
+                } else if (curveStep === 2) {
+                    redrawAll();
+                    drawCtx.strokeStyle = color;
+                    drawCtx.lineWidth = 4;
+                    drawCtx.beginPath();
+                    drawCtx.moveTo(curveP0.x, curveP0.y);
+                    drawCtx.quadraticCurveTo(pos.x, pos.y, curveP2.x, curveP2.y);
+                    drawCtx.stroke();
+                    drawArrowHead(drawCtx, pos.x, pos.y, curveP2.x, curveP2.y, color);
+                }
+            } 
+            else if (isLineDrawing) {
+                redrawAll();
+                drawCtx.strokeStyle = color;
+                drawCtx.lineWidth = 4;
+                drawCtx.setLineDash(tool === 'dashed' ? [8, 6] : []);
+                drawCtx.beginPath();
+                drawCtx.moveTo(lineStart.x, lineStart.y);
+                drawCtx.lineTo(pos.x, pos.y);
+                drawCtx.stroke();
+                drawCtx.setLineDash([]);
+                drawArrowHead(drawCtx, lineStart.x, lineStart.y, pos.x, pos.y, color);
+            }
+        });
+
+        drawCanvas.addEventListener('mouseup', (e) => {
+            const pos = getPos(e);
+            const tool = document.getElementById('toolSelect').value;
+            const color = document.getElementById('colorSelect').value;
+
+            if (isDragging) {
+                isDragging = false;
+                dragTarget = null;
+            } 
+            else if (isLineDrawing) {
+                isLineDrawing = false;
+                saveSnapshot();
+                shapes.push({
+                    type: tool,
+                    x1: lineStart.x, y1: lineStart.y,
+                    x2: pos.x, y2: pos.y,
+                    color: color
+                });
+                redrawAll();
+            }
+        });
+
+        drawPitch();
+        updateStatus();
+    </script>
+    </body>
+    </html>
+    """
+    st.components.v1.html(html_code, height=480)
+
 # --- INTELLIGENTER JSON-SLICER ---
 def extract_json_array(text):
-    """Filtert exakt das erste gültige JSON-Array [...] heraus."""
     text = re.sub(r'```(?:json)?', '', text, flags=re.IGNORECASE).strip()
     start_idx = text.find('[')
     if start_idx != -1:
@@ -85,35 +526,23 @@ def extract_json_array(text):
                     if bracket_count == 0: return text[start_idx:i+1]
     return text
 
-# --- DYNAMISCHE GEMINI-ABFRAGE ---
+# --- BESCHLEUNIGTE GEMINI-ABFRAGE ---
 def get_gemini_json_text(prompt, api_key):
     genai.configure(api_key=api_key.strip())
-    available_models = []
-    try:
-        for m in genai.list_models():
-            if 'generateContent' in m.supported_generation_methods:
-                available_models.append(m.name)
-    except Exception: pass
-        
-    if not available_models:
-        available_models = ['models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-2.5-flash', 'models/gemini-pro', 'gemini-1.5-flash']
-
-    gen_config = {"response_mime_type": "application/json"}
+    fast_models = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-pro']
+    
     last_err = None
-    for m in available_models:
+    for m in fast_models:
         try:
-            model = genai.GenerativeModel(m, generation_config=gen_config)
+            model = genai.GenerativeModel(m, generation_config={"response_mime_type": "application/json"})
             res = model.generate_content(prompt)
             if res and res.text: return res.text
-        except Exception:
-            try:
-                model = genai.GenerativeModel(m)
-                res = model.generate_content(prompt)
-                if res and res.text: return res.text
-            except Exception as e: last_err = e; continue
+        except Exception as e:
+            last_err = e
+            continue
             
     if last_err: raise last_err
-    raise Exception("Kein aktives Gemini-Modell gefunden. Bitte prüfe deinen API-Key in den Secrets!")
+    raise Exception("Kein aktives Gemini-Modell gefunden. Bitte prüfe deinen API-Key!")
 
 # --- ECHTE GEMINI KI-GENERATOREN ---
 def generiere_echte_ki_fragen(thema, api_key):
@@ -165,16 +594,6 @@ def generiere_testdaten():
         {"id": 2, "question": "Wie verhalten sich die Außenbahnspieler (LM/RM) im eigenen Ballbesitz?", "options": ["A) Sie machen das Feld maximal breit", "B) Sie stellen sich alle in die Mitte", "C) Sie bleiben beim eigenen Torwart"], "correct": "A) Sie machen das Feld maximal breit", "points": 10, "used_count": 1}
     ]
     
-    prinzipien_liste = [
-        {"id": 1, "title": "⚡ 5-Sekunden-Gegenpressing", "category": "⚽ Auf dem Platz (Taktik)", "positions": ["Alle"], "desc": "Bei Ballverlust schalten wir SOFORT um. Die ersten 5 Sekunden gehören voll uns!"},
-        {"id": 2, "title": "🎯 Minimales Kontaktespiel", "category": "⚽ Auf dem Platz (Taktik)", "positions": ["Alle"], "desc": "Der Ball ist schneller als jeder Gegenspieler. Max. 2-3 Kontakte im Zentrum!"},
-        {"id": 3, "title": "🔥 100% Fokus ab Aufwärmen", "category": "🧠 Neben dem Platz (Einstellung)", "positions": ["Alle"], "desc": "Schuhe zu, Gürtel festziehen. Wenn das Aufwärmen startet, blendet jeder Quatsch aus."},
-        {"id": 4, "title": "🗣️ Positives Coaching untereinander", "category": "🧠 Neben dem Platz (Einstellung)", "positions": ["Alle"], "desc": "Fehler passieren. Wir bauen uns gegenseitig auf und meckern nicht auf dem Platz!"},
-        {"id": 5, "title": "🧤 Lautstarke Kommandos geben", "category": "📍 Positionsspezifisch", "positions": ["TW"], "desc": "Der Torwart sieht das ganze Feld! Kommandos wie 'KEEPER' oder 'LEO' laut herausrufen."},
-        {"id": 6, "title": "🛡️ Offene Körperstellung in der Kette", "category": "📍 Positionsspezifisch", "positions": ["IV", "LV", "RV"], "desc": "Nie den Rücken zum Ball drehen. Immer so stehen, dass man Ball und Gegenspieler im Blick hat."},
-        {"id": 7, "title": "🔄 Klatschen lassen & Aufdrehen", "category": "📍 Positionsspezifisch", "positions": ["ZM", "ZDM"], "desc": "Gegenpress-Druck mit einem Kontakt entweichen oder aufdrehen, wenn der Rücken frei ist."}
-    ]
-    
     return {
         "players": spieler_liste, 
         "exercises": uebungs_liste,
@@ -182,41 +601,47 @@ def generiere_testdaten():
         "active_challenge_id": 1,
         "quiz_pool": master_katalog,
         "active_quiz_ids": [1, 2],
-        "principles": prinzipien_liste
+        "principles": [],
+        "standards": []
     }
 
 def lade_daten():
     data = None
+    local_data = None
+    
+    if os.path.exists(DATA_FILE):
+        try:
+            with open(DATA_FILE, "r", encoding="utf-8") as f:
+                local_data = json.load(f)
+        except Exception:
+            local_data = None
+
     if API_URL:
         try:
-            res = requests.get(API_URL, timeout=15)
-            if res.text.strip().startswith("<!DOCTYPE") or "html" in res.text.lower(): data = None
-            else: data = res.json()
-        except Exception: data = None
-            
-    if data is None:
-        if os.path.exists(DATA_FILE):
-            with open(DATA_FILE, "r", encoding="utf-8") as f: data = json.load(f)
-        else: data = generiere_testdaten()
+            res = requests.get(API_URL, timeout=8)
+            if not res.text.strip().startswith("<!DOCTYPE") and "html" not in res.text.lower():
+                data = res.json()
+        except Exception: 
+            data = None
+
+    if data is None or not isinstance(data, dict) or not data.get("players"):
+        if local_data:
+            data = local_data
+        else:
+            data = generiere_testdaten()
+
+    if local_data and isinstance(local_data, dict):
+        local_p = local_data.get("principles", [])
+        cloud_p = data.get("principles", [])
+        if len(local_p) > len(cloud_p):
+            data["principles"] = local_p
 
     if "players" not in data: data["players"] = []
     if "exercises" not in data: data["exercises"] = []
-    if "principles" not in data or not data["principles"]: data["principles"] = generiere_testdaten()["principles"]
-    
-    # MIGRATIONS-LOGIK FÜR NEUES PRINZIPIEN-FORMAT
+    if "principles" not in data: data["principles"] = []
+    if "standards" not in data: data["standards"] = []
+
     for pr in data.get("principles", []):
-        if "supporters" in pr: del pr["supporters"]
-        if "is_focus" in pr: del pr["is_focus"]
-        if "type" in pr: del pr["type"]
-        if "position" in pr:
-            old_p = pr.pop("position")
-            if isinstance(old_p, str):
-                if "TW" in old_p: pr["positions"] = ["TW"]
-                elif "Abwehr" in old_p: pr["positions"] = ["IV", "LV", "RV"]
-                elif "Mittelfeld" in old_p: pr["positions"] = ["ZDM", "ZM", "ZOM"]
-                elif "Flügel" in old_p: pr["positions"] = ["LM", "RM", "LF", "RF"]
-                elif "Sturm" in old_p: pr["positions"] = ["ST"]
-                else: pr["positions"] = ["Alle"]
         if "positions" not in pr or not isinstance(pr["positions"], list):
             pr["positions"] = ["Alle"]
 
@@ -244,17 +669,28 @@ def lade_daten():
             else: p["base_pac"], p["base_sho"], p["base_pas"], p["base_dri"], p["base_def"], p["base_phy"] = 88, 78, 64, 84, 38, 70
     return data
 
-def speichere_daten(data):
-    if API_URL:
-        try:
-            res = requests.post(API_URL, data=json.dumps(data), headers={"Content-Type": "application/json"}, timeout=30)
-            if res.status_code in [200, 302]: return True
-            else: st.error(f"Fehler beim Sichern in der Cloud. Status: {res.status_code}"); return False
-        except Exception as e: st.error(f"Verbindung zur Google-Cloud unterbrochen: {e}"); return False
+# --- CLOUD BACKGROUND WORKER ---
+def _cloud_sync_worker(payload_str, url):
     try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f: json.dump(data, f, indent=4)
-        return True
-    except Exception as e: st.error(f"Lokaler Speicherfehler: {e}"); return False
+        requests.post(url, data=payload_str, headers={"Content-Type": "text/plain"}, timeout=15)
+    except Exception as e:
+        print(f"Hintergrund-Speicherfehler Cloud: {e}")
+
+# --- PFEILSCHNELLE SPEICHERFUNKTION ---
+def speichere_daten(data):
+    st.session_state.data = data
+    payload_str = json.dumps(data, ensure_ascii=False)
+    
+    try:
+        with open(DATA_FILE, "w", encoding="utf-8") as f:
+            f.write(payload_str)
+    except Exception as e:
+        st.error(f"❌ Lokaler Speicherfehler: {e}")
+
+    if API_URL:
+        threading.Thread(target=_cloud_sync_worker, args=(payload_str, API_URL), daemon=True).start()
+        
+    return True
 
 # --- INITIALISIERUNG DER SPEICHERRÄUME ---
 if "data" not in st.session_state: st.session_state.data = lade_daten()
@@ -262,12 +698,10 @@ if "zuweisungen" not in st.session_state: st.session_state.zuweisungen = {}
 
 nur_spieler = [p for p in st.session_state.data["players"] if p.get("role", "Spieler") == "Spieler"]
 
-# --- PERSISTENT LOGIN BERECHNUNG AUS DER URL ---
 qp_trainer = st.query_params.get("trainer") == "1"
 qp_player = st.query_params.get("player")
 qp_pin = st.query_params.get("pin")
 
-# KEY UNSICHTBAR IN HINTERGRUND-VARIABLE LADEN
 gemini_key = get_background_gemini_key()
 
 # --- SIDEBAR: PASSWORT-SCHUTZ & PERSISTENTER SPIELER LOGIN ---
@@ -285,6 +719,9 @@ with st.sidebar:
     if is_trainer:
         st.query_params["trainer"] = "1"
         st.success("👨‍🍳 Trainer-Modus aktiv")
+        if not gemini_key:
+            gemini_key_input = st.text_input("🔑 Google Gemini API Key:", type="password", key="gemini_key_input")
+            gemini_key = gemini_key_input.strip()
     else:
         if "trainer" in st.query_params: del st.query_params["trainer"]
         st.info("👪 Eltern-Modus active")
@@ -395,16 +832,17 @@ def generiere_pitch_html(aufstellung_dict, ersatzbank_liste, team_name):
     return html_code
 
 # --- UI: NAVIGATION REORGANISIEREN ---
-available_tabs = ["📊 Übersicht", "📜 Team-DNA", "🔍 Spieler-Profile", "📖 Spielübersicht", "🎮 Challenge & Quiz"]
+available_tabs = ["📊 Übersicht", "📜 Team-DNA", "📐 Standards", "🔍 Spieler-Profile", "📖 Spielübersicht", "🎮 Challenge & Quiz"]
 
 if logged_in_player or is_trainer: available_tabs += ["🎥 Videoanalyse"]
 if is_trainer: available_tabs += ["🏃‍♂️ Kader", "⚽ Spiel loggen", "🤖 KI Twin-Teams", "📥 Import (SpielerPlus)", "📋 Trainingsplaner"]
 available_tabs += ["🏆 Liga-Tabelle"]
 
 tab_slugs = {
-    "📊 Übersicht": "uebersicht", "📜 Team-DNA": "dna", "🔍 Spieler-Profile": "profile", "📖 Spielübersicht": "spieluebersicht", 
-    "🎮 Challenge & Quiz": "challenge", "🎥 Videoanalyse": "video", "🏃‍♂️ Kader": "kader", "⚽ Spiel loggen": "spiel-loggen", 
-    "🤖 KI Twin-Teams": "ki-teams", "📥 Import (SpielerPlus)": "import", "📋 Trainingsplaner": "planer", "🏆 Liga-Tabelle": "liga"
+    "📊 Übersicht": "uebersicht", "📜 Team-DNA": "dna", "📐 Standards": "standards", "🔍 Spieler-Profile": "profile", 
+    "📖 Spielübersicht": "spieluebersicht", "🎮 Challenge & Quiz": "challenge", "🎥 Videoanalyse": "video", 
+    "🏃‍♂️ Kader": "kader", "⚽ Spiel loggen": "spiel-loggen", "🤖 KI Twin-Teams": "ki-teams", 
+    "📥 Import (SpielerPlus)": "import", "📋 Trainingsplaner": "planer", "🏆 Liga-Tabelle": "liga"
 }
 slug_to_tab = {v: k for k, v in tab_slugs.items()}
 url_slug = st.query_params.get("tab", "uebersicht")
@@ -507,7 +945,7 @@ if selected_tab == "📊 Übersicht":
                 st.info("Noch keine Scorer registriert.")
     else: st.info("Keine Spieler im Kader.")
 
-# --- 📜 TAB 1.5: ALSTERBRÜDER TEAM-DNA & PRINZIPIEN ---
+# --- 📜 TAB 1.5: TEAM-DNA ---
 if selected_tab == "📜 Team-DNA":
     st.subheader("📜 Alsterbrüder U13 Team-DNA & Leitprinzipien")
     st.caption("Unsere gemeinsamen Taktikregeln, Werthaltungen und positionsspezifischen Aufgaben!")
@@ -524,7 +962,7 @@ if selected_tab == "📜 Team-DNA":
                 st.markdown(f"#### {p['title']}")
             with col_t2:
                 if pos_str != "Alle":
-                    st.caption(f"📍 **{pos_str}**")
+                    st.caption(f"📍 Positionen: **{pos_str}**")
             st.write(p["desc"])
 
     dna_tab1, dna_tab2, dna_tab3 = st.tabs([
@@ -534,17 +972,17 @@ if selected_tab == "📜 Team-DNA":
     ])
     
     with dna_tab1:
-        kat_platz = [p for p in prinzipien if "Platz" in p.get("category", "")]
+        kat_platz = [p for p in prinzipien if p.get("category") == "⚽ Auf dem Platz (Taktik)" or ("Auf dem Platz" in p.get("category", "") and "Neben" not in p.get("category", ""))]
         if not kat_platz: st.info("Noch keine taktischen Prinzipien hinterlegt.")
         for p in kat_platz: render_prinzip_card(p)
 
     with dna_tab2:
-        kat_geist = [p for p in prinzipien if "Neben" in p.get("category", "") or "Einstellung" in p.get("category", "")]
+        kat_geist = [p for p in prinzipien if p.get("category") == "🧠 Neben dem Platz (Einstellung)" or "Neben dem Platz" in p.get("category", "") or "Einstellung" in p.get("category", "")]
         if not kat_geist: st.info("Noch keine Einstellungs-Prinzipien hinterlegt.")
         for p in kat_geist: render_prinzip_card(p)
 
     with dna_tab3:
-        kat_pos = [p for p in prinzipien if "Position" in p.get("category", "")]
+        kat_pos = [p for p in prinzipien if p.get("category") == "📍 Positionsspezifisch" or "Position" in p.get("category", "")]
         if not kat_pos: 
             st.info("Noch keine positionsspezifischen Aufgaben hinterlegt.")
         else:
@@ -565,10 +1003,12 @@ if selected_tab == "📜 Team-DNA":
         st.divider()
         st.markdown("### 🛠️ Trainer-Verwaltung: Team-DNA bearbeiten")
         
-        tr_p1, tr_p2, tr_p3 = st.tabs([
+        tr_p1, tr_p2, tr_p3, tr_p4, tr_p5 = st.tabs([
             "➕ Neues Prinzip hinzufügen", 
             "✏️ Prinzip bearbeiten", 
-            "🗑️ Prinzip löschen"
+            "🔃 Reihenfolge ändern",
+            "🗑️ Prinzip löschen",
+            "💾 Backup & Wiederherstellung"
         ])
         
         CAT_OPTIONS = ["⚽ Auf dem Platz (Taktik)", "🧠 Neben dem Platz (Einstellung)", "📍 Positionsspezifisch"]
@@ -585,26 +1025,31 @@ if selected_tab == "📜 Team-DNA":
                         st.error("Titel und Beschreibung dürfen nicht leer sein!")
                     else:
                         neue_id = max([p["id"] for p in prinzipien] + [0]) + 1
-                        prinzipien.append({
+                        neues_objekt = {
                             "id": neue_id,
                             "title": p_title.strip(),
                             "category": p_cat,
                             "positions": p_pos if p_pos else ["Alle"],
                             "desc": p_desc.strip()
-                        })
-                        st.session_state.data["principles"] = prinzipien
-                        if speichere_daten(st.session_state.data):
-                            st.success("Neues Prinzip gespeichert!")
-                            st.rerun()
+                        }
+                        
+                        prinzipien_pool = st.session_state.data.get("principles", [])
+                        prinzipien_pool.append(neues_objekt)
+                        st.session_state.data["principles"] = prinzipien_pool
+                        
+                        speichere_daten(st.session_state.data)
+                        st.toast("🎉 Prinzip erfolgreich gespeichert!", icon="💾")
+                        st.rerun()
 
         with tr_p2:
-            if not prinzipien:
+            prinzipien_pool = st.session_state.data.get("principles", [])
+            if not prinzipien_pool:
                 st.info("Keine Prinzipien zum Bearbeiten vorhanden.")
             else:
-                p_options = {f"[{p['id']}] {p['title']} ({p.get('category', '-')})": p["id"] for p in prinzipien}
+                p_options = {f"[{p['id']}] {p['title']} ({p.get('category', '-')})": p["id"] for p in prinzipien_pool}
                 sel_p_label = st.selectbox("Wähle ein Prinzip zum Bearbeiten aus:", list(p_options.keys()))
                 sel_p_id = p_options[sel_p_label]
-                edit_p = next((x for x in prinzipien if x["id"] == sel_p_id), None)
+                edit_p = next((x for x in prinzipien_pool if x["id"] == sel_p_id), None)
                 
                 if edit_p:
                     with st.form("edit_principle_form"):
@@ -625,21 +1070,175 @@ if selected_tab == "📜 Team-DNA":
                             edit_p["positions"] = e_pos if e_pos else ["Alle"]
                             edit_p["desc"] = e_desc.strip()
                             
-                            st.session_state.data["principles"] = prinzipien
-                            if speichere_daten(st.session_state.data):
-                                st.success("Prinzip erfolgreich aktualisiert!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.toast("🎉 Prinzip aktualisiert!", icon="✏️")
+                            st.rerun()
 
         with tr_p3:
-            st.markdown("##### 🗂️ Prinzipien unwiderruflich löschen:")
-            for p in prinzipien:
+            st.markdown("##### 🔃 Reihenfolge der Prinzipien verschieben")
+            st.caption("Nutze die Pfeiltasten, um Prinzipien weiter nach oben oder unten zu schieben:")
+            prinzipien_pool = st.session_state.data.get("principles", [])
+            
+            if not prinzipien_pool:
+                st.info("Keine Prinzipien vorhanden.")
+            else:
+                for idx, p in enumerate(prinzipien_pool):
+                    with st.container(border=True):
+                        c_num, c_title, c_up, c_down = st.columns([1, 6, 1, 1])
+                        c_num.markdown(f"**#{idx + 1}**")
+                        pos_info = ", ".join(p.get("positions", ["Alle"]))
+                        c_title.markdown(f"**{p['title']}** (`{p.get('category', '-')}` | `{pos_info}`)")
+                        
+                        if idx > 0:
+                            if c_up.button("⬆️", key=f"p_up_{p['id']}_{idx}"):
+                                prinzipien_pool[idx], prinzipien_pool[idx - 1] = prinzipien_pool[idx - 1], prinzipien_pool[idx]
+                                st.session_state.data["principles"] = prinzipien_pool
+                                speichere_daten(st.session_state.data)
+                                st.rerun()
+                        
+                        if idx < len(prinzipien_pool) - 1:
+                            if c_down.button("⬇️", key=f"p_down_{p['id']}_{idx}"):
+                                prinzipien_pool[idx], prinzipien_pool[idx + 1] = prinzipien_pool[idx + 1], prinzipien_pool[idx]
+                                st.session_state.data["principles"] = prinzipien_pool
+                                speichere_daten(st.session_state.data)
+                                st.rerun()
+
+        with tr_p4:
+            prinzipien_pool = st.session_state.data.get("principles", [])
+            st.markdown("##### 🗑️ Einzelne oder ALLE Prinzipien löschen:")
+            
+            if st.button("💥 Alle aktuellen Prinzipien auf einmal löschen (Leerer Neustart)", type="secondary"):
+                st.session_state.data["principles"] = []
+                speichere_daten(st.session_state.data)
+                st.toast("🔥 Alle Prinzipien gelöscht!")
+                st.rerun()
+
+            st.write("---")
+            for p in prinzipien_pool:
                 col_d1, col_d2 = st.columns([4, 1])
                 pos_info = ", ".join(p.get("positions", ["Alle"]))
                 col_d1.write(f"**[{p['id']}] {p['title']}** (`{p.get('category','-')}` | `{pos_info}`)")
                 if col_d2.button("🗑️ Löschen", key=f"del_p_{p['id']}"):
-                    st.session_state.data["principles"] = [x for x in prinzipien if x["id"] != p["id"]]
-                    if speichere_daten(st.session_state.data):
-                        st.success("Prinzip gelöscht!")
+                    st.session_state.data["principles"] = [x for x in prinzipien_pool if x["id"] != p["id"]]
+                    speichere_daten(st.session_state.data)
+                    st.toast("🗑️ Prinzip gelöscht!")
+                    st.rerun()
+
+        with tr_p5:
+            st.markdown("##### 💾 Datenbank-Sicherung (JSON Export & Import)")
+            st.caption("Lade deine aktuellen Daten als Datei herunter oder spiele ein Backup ein:")
+            
+            json_str = json.dumps(st.session_state.data, indent=4, ensure_ascii=False)
+            st.download_button(
+                label="📥 Aktuellen Datenstand herunterladen (.json)",
+                data=json_str,
+                file_name=f"alsterbrueder_backup_{datetime.now().strftime('%Y%m%d_%H%M')}.json",
+                mime="application/json",
+                type="primary"
+            )
+            
+            st.write("")
+            uploaded_backup = st.file_uploader("📤 Backup-Datei hochladen (.json Wiederherstellung)", type=["json"])
+            if uploaded_backup is not None:
+                if st.button("🔥 Backup jetzt einspielen & überschreiben"):
+                    try:
+                        restored_data = json.load(uploaded_backup)
+                        st.session_state.data = restored_data
+                        speichere_daten(restored_data)
+                        st.success("🎉 Backup erfolgreich eingespielt!")
+                        st.rerun()
+                    except Exception as e:
+                        st.error(f"Fehler beim Laden des Backups: {e}")
+
+# --- 📐 TAB 1.8: STANDARDS & TAKTIKBOARD ---
+if selected_tab == "📐 Standards":
+    st.subheader("📐 Standard-Varianten & Taktikboard")
+    st.caption("Unsere einstudierten Ecken, Freistöße und Einwürfe auf einen Blick!")
+    
+    standards_list = st.session_state.data.get("standards", [])
+    
+    filter_type = st.selectbox("Nach Typ filtern:", ["Alle Typen", "Ecke Links", "Ecke Rechts", "Freistoß", "Einwurf"])
+    gefilderte_st = standards_list if filter_type == "Alle Typen" else [s for s in standards_list if s.get("type") == filter_type]
+    
+    if not gefilderte_st:
+        st.info("Noch keine Standard-Varianten hinterlegt.")
+    else:
+        for s in gefilderte_st:
+            with st.container(border=True):
+                col_info, col_img = st.columns([1, 1])
+                with col_info:
+                    st.markdown(f"### {s['title']}")
+                    st.caption(f"📌 Typ: **{s.get('type', '-')}** | 🗣️ Rufsignal: **{s.get('signal', 'Keins')}**")
+                    st.markdown(f"**🛠️ Ablauf & Aufgaben:**\n{s.get('desc', '-')}")
+                with col_img:
+                    if s.get("image"):
+                        st.image(f"data:image/png;base64,{s['image']}", caption="Taktik-Skizze", use_container_width=True)
+                    else:
+                        st.info("Keine Taktik-Skizze hinterlegt.")
+
+    if is_trainer:
+        st.divider()
+        st.markdown("### 🛠️ Trainer-Verwaltung: Standards zeichnen & verwalten")
+        
+        st_tr1, st_tr2 = st.tabs(["✏️ Neue Variante zeichnen", "🗑️ Variante löschen"])
+        
+        with st_tr1:
+            st.markdown("##### 📐 Neue Standard-Variante anlegen")
+            s_title = st.text_input("Name der Variante (z.B. 'Ecke Kurz - Alpha'):", key="std_title")
+            c_s1, c_s2 = st.columns(2)
+            s_type = c_s1.selectbox("Typ:", ["Ecke Links", "Ecke Rechts", "Freistoß", "Einwurf"], key="std_type")
+            s_signal = c_s2.text_input("Signal / Rufwort (z.B. 'Rechte Hand hoch'):", key="std_signal")
+            s_desc = st.text_area("Laufwege & Aufgaben (Wer läuft wohin?):", key="std_desc")
+            
+            st.markdown("---")
+            st.markdown("##### 🎨 Taktik-Spielfeld & Zeichenbrett")
+            
+            # RENDERT DAS INTERAKTIVE HTML5 TAKTIKBOARD WITH EXAKTEM 16M-HALBKREIS & MAGNET-DRAG
+            render_html5_taktikboard()
+
+            st.write("")
+            st.info("💡 **Tipp:** Wenn du fertig gezeichnet hast, klicke oben im Board auf '📸 Skizze als Bild speichern' und lade das Bild hier hoch:")
+            uploaded_sketch = st.file_uploader("📸 Heruntergeladene Taktikskizze hier hochladen:", type=["png", "jpg", "jpeg"], key="std_sketch_upload")
+
+            if st.button("💾 Standard-Variante dauerhaft speichern", type="primary"):
+                if not s_title.strip():
+                    st.error("Bitte gib der Variante einen Namen!")
+                else:
+                    img_b64_to_save = ""
+                    if uploaded_sketch is not None:
+                        img_bytes = uploaded_sketch.read()
+                        img_b64_to_save = base64.b64encode(img_bytes).decode("utf-8")
+                        
+                    neue_id = max([s["id"] for s in standards_list] + [0]) + 1
+                    neues_std = {
+                        "id": neue_id,
+                        "title": s_title.strip(),
+                        "type": s_type,
+                        "signal": s_signal.strip(),
+                        "desc": s_desc.strip(),
+                        "image": img_b64_to_save
+                    }
+                    
+                    standards_pool = st.session_state.data.get("standards", [])
+                    standards_pool.append(neues_std)
+                    st.session_state.data["standards"] = standards_pool
+                    
+                    speichere_daten(st.session_state.data)
+                    st.toast("🎉 Standard-Variante gesichert!", icon="📐")
+                    st.rerun()
+
+        with st_tr2:
+            st.markdown("##### 🗑️ Bestehende Standard-Varianten löschen:")
+            if not standards_list:
+                st.info("Keine Varianten vorhanden.")
+            else:
+                for s in standards_list:
+                    col_sa, col_sb = st.columns([4, 1])
+                    col_sa.write(f"**[{s['id']}] {s['title']}** (`{s.get('type', '-')}` | Signal: `{s.get('signal', '-')}`)")
+                    if col_sb.button("🗑️ Löschen", key=f"del_std_{s['id']}"):
+                        st.session_state.data["standards"] = [x for x in standards_list if x["id"] != s["id"]]
+                        speichere_daten(st.session_state.data)
+                        st.toast("🗑️ Variante gelöscht!")
                         st.rerun()
 
 # --- 🔍 TAB 2: SPIELER-PROFILE (FUT + RADAR-CHART + BADGES + FORMKURVE) ---
@@ -836,9 +1435,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                         st.session_state.data["active_challenge_id"] = chosen_id
                         chosen_c = next((c for c in challenge_katalog if c["id"] == chosen_id), None)
                         if chosen_c: chosen_c["used_count"] = chosen_c.get("used_count", 0) + 1
-                        if speichere_daten(st.session_state.data):
-                            st.success("Wochen-Challenge ist live geschaltet!")
-                            st.rerun()
+                        speichere_daten(st.session_state.data)
+                        st.success("Wochen-Challenge ist live geschaltet!")
+                        st.rerun()
 
             with ch_tr_2:
                 st.markdown("##### 🤖 Echte Google Gemini-KI um neue Challenges bitten")
@@ -864,9 +1463,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                             neue_id = max([c["id"] for c in challenge_katalog] + [0]) + 1
                             challenge_katalog.append({"id": neue_id, "title": ki_c["title"], "points": int(ki_c.get("points", 25)), "used_count": 0})
                             st.session_state.data["challenge_pool"] = challenge_katalog
-                            if speichere_daten(st.session_state.data):
-                                st.success("Challenge in deinen Katalog gespeichert!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.success("Challenge in deinen Katalog gespeichert!")
+                            st.rerun()
 
             with ch_tr_3:
                 st.markdown("##### ✏️ Eigenen Challenge-Entwurf erstellen")
@@ -879,9 +1478,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                             neue_id = max([c["id"] for c in challenge_katalog] + [0]) + 1
                             challenge_katalog.append({"id": neue_id, "title": m_title.strip(), "points": int(m_pts), "used_count": 0})
                             st.session_state.data["challenge_pool"] = challenge_katalog
-                            if speichere_daten(st.session_state.data):
-                                st.success("Neue Challenge im Katalog gespeichert!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.success("Neue Challenge im Katalog gespeichert!")
+                            st.rerun()
 
             with ch_tr_4:
                 st.markdown("##### 🗂️ Gesamter Challenge-Katalog:")
@@ -892,9 +1491,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                     c_col1.write(f"**[{c['id']}] {c['title']}** `{status}`{is_active} (`{c.get('points',25)} EP`)")
                     if c_col2.button("🗑️ Löschen", key=f"del_c_{c['id']}"):
                         st.session_state.data["challenge_pool"] = [x for x in challenge_katalog if x["id"] != c["id"]]
-                        if speichere_daten(st.session_state.data):
-                            st.success("Challenge gelöscht!")
-                            st.rerun()
+                        speichere_daten(st.session_state.data)
+                        st.success("Challenge gelöscht!")
+                        st.rerun()
 
         # 🏃‍♂️ SPIELER-ABHAKEN
         if logged_in_player and aktive_challenge:
@@ -908,7 +1507,10 @@ if selected_tab == "🎮 Challenge & Quiz":
                     logged_in_player["points"] = logged_in_player.get("points", 0) + int(aktive_challenge.get("points", 25))
                     if "completed_challenges" not in logged_in_player: logged_in_player["completed_challenges"] = []
                     logged_in_player["completed_challenges"].append(c_id_key)
-                    if speichere_daten(st.session_state.data): st.balloons(); st.success("Punkte gutgeschrieben!"); st.rerun()
+                    speichere_daten(st.session_state.data)
+                    st.balloons()
+                    st.success("Punkte gutgeschrieben!")
+                    st.rerun()
         elif not logged_in_player: st.info("🔒 Logge dich in der Sidebar als Spieler ein, um die Challenge abzuhaken.")
 
     # --- SUBTAB 2: TAKTIK-QUIZ ---
@@ -953,9 +1555,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                             q_obj = next((x for x in master_katalog if x["id"] == n_id), None)
                             if q_obj: q_obj["used_count"] = q_obj.get("used_count", 0) + 1
                             
-                        if speichere_daten(st.session_state.data):
-                            st.success(f"Erfolgreich {len(neue_aktive_ids)} Fragen für die Woche aktiviert!")
-                            st.rerun()
+                        speichere_daten(st.session_state.data)
+                        st.success(f"Erfolgreich {len(neue_aktive_ids)} Fragen für die Woche aktiviert!")
+                        st.rerun()
 
             with tr_q_tab2:
                 st.markdown("##### 🤖 Echte Google Gemini-KI um Taktikfragen bitten")
@@ -988,9 +1590,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                                 "used_count": 0
                             })
                             st.session_state.data["quiz_pool"] = master_katalog
-                            if speichere_daten(st.session_state.data):
-                                st.success("Frage in deinen Katalog gespeichert!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.success("Frage in deinen Katalog gespeichert!")
+                            st.rerun()
 
             with tr_q_tab3:
                 st.markdown("##### ✏️ Eigenen Frage-Entwurf zum Katalog hinzufügen")
@@ -1016,9 +1618,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                                 "used_count": 0
                             })
                             st.session_state.data["quiz_pool"] = master_katalog
-                            if speichere_daten(st.session_state.data):
-                                st.success("Neue Frage im Katalog gespeichert!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.success("Neue Frage im Katalog gespeichert!")
+                            st.rerun()
 
             with tr_q_tab4:
                 st.markdown("##### 🗂️ Alle Fragen im Gesamtkatalog:")
@@ -1032,9 +1634,9 @@ if selected_tab == "🎮 Challenge & Quiz":
                         if col_q2.button("🗑️ Löschen", key=f"del_q_{q['id']}"):
                             st.session_state.data["quiz_pool"] = [x for x in master_katalog if x["id"] != q["id"]]
                             st.session_state.data["active_quiz_ids"] = [x for x in aktive_ids if x != q["id"]]
-                            if speichere_daten(st.session_state.data):
-                                st.success("Frage gelöscht!")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.success("Frage gelöscht!")
+                            st.rerun()
             st.divider()
 
         # 🏃‍♂️ SPIELER-ANSICHT (NUR AKTIVE WOCHEN-FRAGEN BEANTWORTEN)
@@ -1073,10 +1675,10 @@ if selected_tab == "🎮 Challenge & Quiz":
                             if "solved_quizzes" not in logged_in_player: logged_in_player["solved_quizzes"] = []
                             logged_in_player["solved_quizzes"].extend(neu_geloest)
                             
-                            if speichere_daten(st.session_state.data):
-                                st.balloons()
-                                st.success(f"🎉 Richtig gewusst! Du hast `{neue_punkte} EP` erhalten! Dein neues Level liegt bei `{berechne_level(logged_in_player['points'])}`.")
-                                st.rerun()
+                            speichere_daten(st.session_state.data)
+                            st.balloons()
+                            st.success(f"🎉 Richtig gewusst! Du hast `{neue_punkte} EP` erhalten! Dein neues Level liegt bei `{berechne_level(logged_in_player['points'])}`.")
+                            st.rerun()
                         else:
                             st.error("❌ Das war leider noch nicht ganz richtig. Lies dir die Fragen nochmal genau durch!")
             else:
@@ -1097,9 +1699,9 @@ if selected_tab == "🎥 Videoanalyse":
         if st.button("🎥 Videoanalyse für Spieler speichern", type="primary"):
             p_obj["video_url"] = v_url.strip()
             p_obj["video_notes"] = v_notes.strip()
-            if speichere_daten(st.session_state.data):
-                st.success(f"Videoanalyse für {sel_v_player} erfolgreich gesichert!")
-                st.rerun()
+            speichere_daten(st.session_state.data)
+            st.success(f"Videoanalyse für {sel_v_player} erfolgreich gesichert!")
+            st.rerun()
                 
     elif logged_in_player:
         st.markdown(f"#### 👋 Hi {logged_in_player['name']}, hier ist deine persönliche Analyse:")
@@ -1180,7 +1782,8 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
                     "base_dri": int(row["DRI"] or 70), "base_def": int(row["DEF"] or 55), "base_phy": int(row["PHY"] or 65)
                 })
         st.session_state.data["players"] = neuer_kader
-        if speichere_daten(st.session_state.data): st.success("Kader erfolgreich in der Cloud aktualisiert!")
+        speichere_daten(st.session_state.data)
+        st.success("Kader erfolgreich aktualisiert!")
 
 # --- TAB 5: SPIEL LOGGEN ---
 if selected_tab == "⚽ Spiel loggen" and is_trainer:
@@ -1188,7 +1791,7 @@ if selected_tab == "⚽ Spiel loggen" and is_trainer:
     c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
     col_blau, col_gelb = st.columns(2)
     with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
-    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[2].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
+    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[3].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
     st.divider(); spiel_liste = []
     for p in nur_spieler:
         planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
@@ -1196,7 +1799,7 @@ if selected_tab == "⚽ Spiel loggen" and is_trainer:
         spiel_liste.append({"ID": str(p["id"]), "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": default_status, "⚽ Tore": 0, "Vorlagen": 0})
     spiel_df = pd.DataFrame(spiel_liste)
     if not spiel_df.empty: spiel_df = spiel_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
-    editiertes_spiel = st.data_editor(spiel_df, disabled=["ID", "Nr.", "Name"], hide_index=True, column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Team / Status": st.column_config.SelectboxColumn(options=["🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Nicht in Kader"], required=True), "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")}, use_container_width=True)
+    editiertes_spiel = st.data_editor(spiel_df, disabled=["ID", "Nr.", "Name"], hide_index=True, column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Team / Status": st.column_config.SelectboxColumn(options=["🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Nicht im Kader"], required=True), "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")}, use_container_width=True)
     if st.button("Spieltag speichern", type="primary"):
         if not m_opponent.strip(): st.error("Gegner fehlt!")
         else:
@@ -1209,7 +1812,8 @@ if selected_tab == "⚽ Spiel loggen" and is_trainer:
                 db_team = "Blau" if status == "🔵 Team Blau" else ("Gelb" if status == "🟡 Team Gelb" else ("Ersatz" if status == "🔄 Ersatzbank" else "Abwesend"))
                 act = db_team in ["Blau", "Gelb", "Ersatz"]
                 spieler["matches"].append({"date": str(m_datum), "opponent": m_opponent.strip(), "type": m_type, "team_blau_results": r_blau, "team_gelb_results": r_gelb, "played": act, "team": db_team, "goals": int(row["⚽ Tore"]) if act else 0, "assists": int(row["Vorlagen"]) if act else 0})
-            if speichere_daten(st.session_state.data): st.success("Spieltag erfolgreich in der Cloud archiviert!")
+            speichere_daten(st.session_state.data)
+            st.success("Spieltag erfolgreich archiviert!")
 
 # --- TAB 6: KI TWIN-TEAMS + VOLLSTÄNDIGE ALGORITHMIK ---
 if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
@@ -1324,13 +1928,17 @@ if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
                     if bestehender_eintrag: bestehender_eintrag["present"] = anw
                     else: sp["training"].append({"date": p_d, "type": p_y, "present": anw})
                     imp += 1
-                if speichere_daten(st.session_state.data): st.toast("🎉 Daten erfolgreich aktualisiert!", icon="🚀"); st.success(f"🎉 Erfolg! {imp} Einträge wurden verarbeitet.")
+                speichere_daten(st.session_state.data)
+                st.toast("🎉 Daten erfolgreich aktualisiert!", icon="🚀")
+                st.success(f"🎉 Erfolg! {imp} Einträge wurden verarbeitet.")
         except Exception as e: st.error(f"Fehler: {e}")
 
     st.write(""); st.divider(); st.markdown("### ⚠️ Gefahrenzone")
     if st.button("💥 Alle Trainingsdaten unwiderruflich löschen", type="secondary"):
         for p in st.session_state.data["players"]: p["training"] = []
-        if speichere_daten(st.session_state.data): st.toast("🔥 Gelöscht!", icon="🗑️"); st.success("Trainingszähler steht wieder auf 0%!")
+        speichere_daten(st.session_state.data)
+        st.toast("🔥 Gelöscht!", icon="🗑️")
+        st.success("Trainingszähler steht wieder auf 0%!")
 
 # --- TAB 8: TRAININGSPLANER + ÜBUNGSDATENBANK VERWALTUNG ---
 if selected_tab == "📋 Trainingsplaner" and is_trainer:
@@ -1382,7 +1990,9 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                     else:
                         neue_id = max([x["id"] for x in st.session_state.data["exercises"]] + [0]) + 1
                         st.session_state.data["exercises"].append({"id": neue_id, "name": u_name.strip(), "phase": u_phase, "schwerpunkt": u_focus.strip(), "spieler": u_players.strip(), "aufbau": u_setup.strip(), "grafik": u_gfx.strip()})
-                        if speichere_daten(st.session_state.data): st.success("Übung hinzugefügt!"); st.rerun()
+                        speichere_daten(st.session_state.data)
+                        st.success("Übung hinzugefügt!")
+                        st.rerun()
         if st.session_state.data["exercises"]:
             ex_df = pd.DataFrame(st.session_state.data["exercises"])
             editiere_db = st.data_editor(ex_df, disabled=["id"], hide_index=True, use_container_width=True, num_rows="dynamic")
@@ -1391,7 +2001,9 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                 for index, row in editiere_db.iterrows():
                     if str(row["name"]).strip(): neue_liste.append({"id": int(row["id"]) if pd.notna(row["id"]) else random.randint(1000,9999), "name": str(row["name"]), "phase": str(row["phase"]), "schwerpunkt": str(row["schwerpunkt"]), "spieler": str(row["spieler"]), "aufbau": str(row["aufbau"]), "grafik": str(row["grafik"])})
                 st.session_state.data["exercises"] = neue_liste
-                if speichere_daten(st.session_state.data): st.success("Übungsdatenbank aktualisiert!"); st.rerun()
+                speichere_daten(st.session_state.data)
+                st.success("Übungsdatenbank aktualisiert!")
+                st.rerun()
         else: st.info("Übungsdatenbank leer.")
 
 # --- TAB 9: LIGA-ZENTRALE ---
