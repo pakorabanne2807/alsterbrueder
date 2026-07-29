@@ -11,10 +11,12 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-from dotenv import load_dotenv
-
-# --- ENV-DATEI LADE-BEFEHL ---
-load_dotenv()
+# --- ENV-DATEI LADE-BEFEHL (ABGESICHERT) ---
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
 
 # --- GEMINI KI PAKET IMPORTER (NEUES SDK) ---
 try:
