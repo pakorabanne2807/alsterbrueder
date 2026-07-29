@@ -1,24 +1,29 @@
-import streamlit as st
-import pandas as pd
+import base64
+import io
 import json
 import os
-import re  # Für die präzise JSON-Extraktion
-from datetime import datetime
 import random
-import requests
-import threading  # Für das pfeilschnelle Speichern im Hintergrund
+import re
+import threading
+from datetime import datetime
+import pandas as pd
 import plotly.express as px
-import plotly.graph_objects as go  # Für das FUT-Radar-Chart
-from PIL import Image, ImageDraw
-import io
-import base64
+import plotly.graph_objects as go
+import requests
+import streamlit as st
+from dotenv import load_dotenv
 
-# --- GEMINI KI PAKET IMPORTER ---
+# --- ENV-DATEI LADE-BEFEHL ---
+load_dotenv()
+
+# --- GEMINI KI PAKET IMPORTER (NEUES SDK) ---
 try:
-    import google.generativeai as genai
-    HAS_GEMINI_LIB = True
+  from google import genai
+  from google.genai import types
+
+  HAS_GEMINI_LIB = True
 except ImportError:
-    HAS_GEMINI_LIB = False
+  HAS_GEMINI_LIB = False
 
 # --- KONFIGURATION & SETUP ---
 st.set_page_config(
@@ -27,16 +32,131 @@ st.set_page_config(
     layout="wide"
 )
 
-DATA_FILE = "alsterbrueder_daten.json"
+# --- RESPONSIVE SVG-VORSCHAU FÜR SKIZZEN ---
+def render_svg_responsive(svg_code, height=340):
+    if not svg_code or "<svg" not in svg_code:
+        st.caption("Keine Skizze vorhanden.")
+        return
+        
+    # CSS-Wrapper: Erzwingt flexible Skalierung auf 100% Breite ohne Scrollbalken
+    html_wrapper = f"""
+    <div style="display: flex; justify-content: center; align-items: center; width: 100%; overflow: hidden; padding: 5px;">
+        <style>
+            svg {{
+                width: 100% !important;
+                height: auto !important;
+                max-height: {height - 20}px;
+                display: block;
+                margin: 0 auto;
+            }}
+        </style>
+        {svg_code}
+    </div>
+    """
+    st.components.v1.html(html_wrapper, height=height, scrolling=False)
+
+
+# --- GENERATOR FÜR DRUCKFERTIGES DIN-A4 TRAININGSPLAN-PDF ---
+def generiere_druck_html(einheits_titel, datum_str, phasen_liste):
+    html_content = f"""
+    <!DOCTYPE html>
+    <html lang="de">
+    <head>
+        <meta charset="utf-8">
+        <title>{einheits_titel}</title>
+        <style>
+            @page {{ size: A4 portrait; margin: 12mm; }}
+            body {{ font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; color: #0f172a; margin: 0; padding: 0; background-color: #fff; line-height: 1.3; font-size: 11pt; }}
+            .header {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 3px solid #0284c7; padding-bottom: 8px; margin-bottom: 12px; }}
+            .header h1 {{ margin: 0; font-size: 18pt; color: #0369a1; }}
+            .header .meta {{ font-size: 9pt; color: #64748b; text-align: right; }}
+            .phase-box {{ border: 1px solid #cbd5e1; border-radius: 6px; padding: 10px; margin-bottom: 10px; page-break-inside: avoid; background-color: #f8fafc; }}
+            .phase-title {{ font-size: 12pt; font-weight: bold; color: #0284c7; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; margin-bottom: 6px; }}
+            .content-grid {{ display: flex; gap: 12px; }}
+            .text-col {{ flex: 1.8; }}
+            .gfx-col {{ flex: 1; max-width: 220px; text-align: center; display: flex; align-items: center; justify-content: center; }}
+            .gfx-col svg {{ width: 100% !important; height: auto !important; max-height: 180px; border-radius: 4px; border: 1px solid #94a3b8; }}
+            .section-label {{ font-weight: bold; color: #334155; font-size: 9.5pt; margin-top: 4px; display: block; }}
+            .section-text {{ margin: 0 0 4px 0; font-size: 9pt; white-space: pre-line; color: #334155; }}
+            .no-print {{ background: #e0f2fe; padding: 12px; text-align: center; font-weight: bold; margin-bottom: 15px; border-radius: 6px; border: 1px solid #bae6fd; }}
+            .btn-print {{ background: #0284c7; color: white; border: none; padding: 8px 16px; font-size: 11pt; border-radius: 4px; cursor: pointer; margin-top: 6px; font-weight: bold; }}
+            @media print {{ .no-print {{ display: none; }} body {{ background: white; }} .phase-box {{ border: 1px solid #94a3b8; }} }}
+        </style>
+    </head>
+    <body>
+        <div class="no-print">
+            📄 Druckansicht bereit! Klicke auf den Button, um das PDF zu speichern:
+            <br>
+            <button class="btn-print" onclick="window.print()">🖨️ Als PDF speichern / Drucken</button>
+        </div>
+        
+        <div class="header">
+            <div>
+                <h1>⚽ {einheits_titel}</h1>
+                <span style="font-size: 10pt; color: #475569;">SC Alsterbrüder U13 – Trainingsplan</span>
+            </div>
+            <div class="meta">
+                <b>Datum:</b> {datum_str}<br>
+                <b>Feld:</b> Viertelfeld
+            </div>
+        </div>
+    """
+
+    for p in phasen_liste:
+        svg_code = p.get('grafik', '').strip()
+        if not svg_code or '<svg' not in svg_code:
+            svg_code = p.get('svg_code', '').strip()
+
+        html_content += f"""
+        <div class="phase-box">
+            <div class="phase-title">{p.get('phase', p.get('phase_title', 'Phase'))}: {p.get('name', p.get('exercise_name', 'Übung'))}</div>
+            <div class="content-grid">
+                <div class="text-col">
+                    <span class="section-label">🛠️ Aufbau & Material:</span>
+                    <p class="section-text">{p.get('aufbau', p.get('setup_text', '-'))}</p>
+                    <span class="section-label">🏃‍♂️ Ablauf & Regeln:</span>
+                    <p class="section-text">{p.get('flow_text', '-') if 'flow_text' in p else ''}</p>
+                    <span class="section-label">🗣️ Coaching-Punkte:</span>
+                    <p class="section-text">{p.get('coaching_points', '-') if 'coaching_points' in p else ''}</p>
+                </div>
+                <div class="gfx-col">
+                    {svg_code if ("<svg" in svg_code) else "<span style='font-size: 8pt; color: #94a3b8;'>Keine Skizze</span>"}
+                </div>
+            </div>
+        </div>
+        """
+
+    html_content += """
+    </body>
+    </html>
+    """
+    return html_content
+
+import sqlite3
+DB_FILE = "alsterbrueder_daten.db"
+
+# --- SQLITE SETUP (KUGELSICHERER SPEICHER) ---
+def init_db():
+    conn = sqlite3.connect(DB_FILE)
+    c = conn.cursor()
+    # Wir erstellen eine Tabelle mit einem einzigen Key-Value Paar ("main", "JSON-DATEN")
+    c.execute('CREATE TABLE IF NOT EXISTS store (id TEXT PRIMARY KEY, data TEXT)')
+    conn.commit()
+    conn.close()
+
+init_db()
+
 POSITIONS = [
     "TW", "IV", "LV", "RV", "ZDM", "ZM", "ZOM", "LM", "RM", "LF", "RF", "ST"
 ]
-TRAINING_PHASES = [
-    "1. Aufwärmen", 
-    "2. Passspiel", 
-    "3. Rondo", 
-    "4. Torschuss / Spielform", 
-    "5. Abschlussspiel"
+
+# --- STANDARDISIERTE 5 TRAININGS-PHASEN ---
+PHASEN_NAMEN = [
+    "Phase 1: Aufwärmen",
+    "Phase 2: Passspiel",
+    "Phase 3: Rondo",
+    "Phase 4: Duelle / Druck",
+    "Phase 5: Abschlussspiel"
 ]
 
 # --- SICHERE HOLUNG DER SENSIBLEN DATEN (SECRETS / ENV) ---
@@ -48,7 +168,6 @@ def get_secret_value(key_name, default_val=""):
         pass
     return os.environ.get(key_name, default_val).strip()
 
-# 🌍 DYNAMISCHE STRUKTUR FÜR SCHLÜSSEL & CLOUD-URL
 API_URL = get_secret_value("API_URL", "")
 GEMINI_API_KEY = get_secret_value("GEMINI_API_KEY", "")
 
@@ -72,6 +191,7 @@ def berechne_level(punkte):
     else: return "🟢 Jugend-Rookie"
 
 # --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
+# --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
 def render_html5_taktikboard():
     html_code = """
     <!DOCTYPE html>
@@ -79,56 +199,82 @@ def render_html5_taktikboard():
     <head>
     <style>
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; background: #f8fafc; }
-        .controls { display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 8px; align-items: center; background: #ffffff; padding: 10px; border-radius: 8px; border: 1px solid #cbd5e1; }
-        .controls label { font-size: 13px; font-weight: bold; color: #334155; }
-        .controls select, .controls button { padding: 6px 12px; border-radius: 6px; border: 1px solid #94a3b8; font-size: 13px; cursor: pointer; }
-        .btn-primary { background: #1e3a8a; color: white; font-weight: bold; border: none; }
-        .btn-success { background: #16a34a; color: white; font-weight: bold; border: none; }
-        .btn-danger { background: #ef4444; color: white; border: none; font-weight: bold; }
+        .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: center; background: #ffffff; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; }
+        .toolbar-label { font-size: 13px; font-weight: bold; color: #334155; margin-right: 4px; }
+        .drag-item { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; cursor: grab; font-size: 18px; user-select: none; transition: transform 0.1s; }
+        .drag-item:active { cursor: grabbing; transform: scale(1.1); }
+        .tool-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid #94a3b8; font-size: 13px; cursor: pointer; background: #fff; color: #334155; }
+        .tool-btn.active { background: #e2e8f0; border-color: #475569; font-weight: bold; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1); }
+        .btn-action { border: none; font-weight: bold; color: white; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
+        .btn-success { background: #16a34a; }
+        .btn-danger { background: #ef4444; }
+        .divider { border-left: 2px solid #e2e8f0; height: 24px; margin: 0 4px; }
         .status-bar { font-size: 12.5px; font-weight: bold; color: #1e3a8a; background: #f0fdf4; padding: 7px 12px; border-radius: 6px; margin-bottom: 8px; border: 1px solid #bbf7d0; }
         #board-container { position: relative; width: 550px; height: 380px; box-shadow: 0 4px 12px rgba(0,0,0,0.15); border-radius: 8px; overflow: hidden; }
         canvas { position: absolute; top: 0; left: 0; cursor: crosshair; }
+        
+        #textModal { display:none; position:absolute; z-index:100; left:50%; top:50%; transform:translate(-50%, -50%); background:white; padding:15px; border-radius:8px; box-shadow:0 4px 15px rgba(0,0,0,0.3); border:1px solid #cbd5e1; width:240px; }
+        #textModalInput { width:100%; box-sizing:border-box; padding:6px; border-radius:4px; border:1px solid #94a3b8; font-family:sans-serif; resize:none; }
     </style>
     </head>
     <body>
 
-    <div class="controls">
-        <div>
-            <label>Spielfeld:</label>
-            <select id="templateSelect" onchange="resetPitch()">
-                <option value="Eckball">Eckball-Fokus (Tor & 16m)</option>
-                <option value="Halbfeld">Halbfeld-Fokus (Freistoß)</option>
-            </select>
-        </div>
-        <div>
-            <label>Farbe:</label>
-            <select id="colorSelect">
-                <option value="#facc15">🟡 Unser Spieler (Gelb)</option>
-                <option value="#ef4444">🔴 Gegner (Rot)</option>
-                <option value="#000000">⬛ Torwart TW (Schwarz)</option>
-                <option value="#ffffff">⚪ Pass / Laufweg / Bogen (Weiß)</option>
-            </select>
-        </div>
-        <div>
-            <label>Werkzeug:</label>
-            <select id="toolSelect" onchange="onToolChange()">
-                <option value="dot">🟡 Spieler-Punkt setzen</option>
-                <option value="curve">➰ Flugkurve (3-Klick Bogen)</option>
-                <option value="line">📏 Gerader Pass (Linie)</option>
-                <option value="dashed">🏁 Gestrichelter Laufweg</option>
-                <option value="move">✋ Verschieben / Bewegen (Magnete)</option>
-            </select>
-        </div>
-        <button class="btn-danger" onclick="undoLast()">↩️ Rückgängig</button>
-        <button class="btn-danger" onclick="clearDrawings()">🗑️ Leeren</button>
-        <button class="btn-success" onclick="downloadSketch()">📸 Skizze als Bild speichern</button>
+    <div class="toolbar">
+        <div class="toolbar-label">Symbole:</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#facc15')" title="Spieler Gelb">🟡</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#ef4444')" title="Spieler Rot">🔴</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#000000')" title="Torwart">⚫</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'cone', '#ea580c')" title="Hütchen">🔺</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'pole', '#facc15')" title="Stange">📍</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal', '#ffffff')" title="Minitor (H)">🥅</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal_v', '#ffffff')" title="Minitor (V)">🥅<sup style="font-size:10px">V</sup></div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal', '#ffffff')" title="Großes Tor (H)">🥅<sub style="font-size:10px">LH</sub></div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal_v', '#ffffff')" title="Großes Tor (V)">🥅<sub style="font-size:10px">LV</sub></div>
+        <button class="tool-btn" style="margin-left:auto;" onclick="addTextShape()">🔤 Text</button>
     </div>
 
-    <div id="statusBar" class="status-bar">💡 Werkzeug gewählt. Klicke auf das Feld.</div>
+    <div class="toolbar">
+        <div class="toolbar-label">Tools:</div>
+        <button id="btn_move" class="tool-btn active" onclick="setTool('move')" title="Objekte verschieben oder per Rahmen markieren">✋ Markieren</button>
+        <button id="btn_line" class="tool-btn" onclick="setTool('line')">📏 Pass</button>
+        <button id="btn_dashed" class="tool-btn" onclick="setTool('dashed')">🏁 Lauf</button>
+        <button id="btn_curve" class="tool-btn" onclick="setTool('curve')">➰ Kurve</button>
+        
+        <div class="divider"></div>
+        <button class="tool-btn" onclick="copySelection()" title="Auswahl kopieren (Strg+C)">📋 Kopieren</button>
+        <button class="tool-btn" onclick="pasteSelection()" title="Auswahl einfügen (Strg+V)">📥 Einfügen</button>
+        <button class="tool-btn" style="color: #ef4444;" onclick="deleteSelection()" title="Auswahl löschen (Entf)">🗑️ Löschen</button>
+        
+        <div class="divider"></div>
+        <button class="tool-btn" onclick="exportShapes()" title="Bauplan für später speichern">💾 Export</button>
+        <button class="tool-btn" onclick="importShapes()" title="Bauplan wieder laden">📂 Import</button>
+        
+        <div class="divider"></div>
+        <select id="templateSelect" style="margin-left:auto; padding:5px; border-radius:6px; border:1px solid #94a3b8;" onchange="resetPitch()">
+            <option value="Plain">🟩 Leeres Feld</option>
+            <option value="EinTor">🥅 1 Tor & 16er</option>
+            <option value="ZweiTore">🥅🥅 2 Tore</option>
+        </select>
+        <button class="btn-action btn-danger" onclick="clearDrawings()" title="Alles löschen">💥</button>
+        <button class="btn-action btn-success" onclick="downloadSketch()" title="Bild als PNG speichern">📸</button>
+    </div>
+
+    <div id="statusBar" class="status-bar">💡 Aktiviere "Markieren" und ziehe einen Rahmen über den Rasen, um mehrere Objekte zu wählen!</div>
 
     <div id="board-container">
         <canvas id="pitchCanvas" width="550" height="380"></canvas>
         <canvas id="drawCanvas" width="550" height="380"></canvas>
+        
+        <!-- Text-Eingabefenster -->
+        <div id="textModal">
+            <div style="margin-bottom:8px; font-weight:bold; font-size:13px; color:#334155;">📝 Text eingeben:</div>
+            <textarea id="textModalInput" rows="3" placeholder="Dein Text hier..."></textarea>
+            <div style="font-size:10px; color:#64748b; margin-top:4px;">[Enter] Speichern | [Strg+Enter] Absatz</div>
+            <div style="margin-top:10px; display:flex; justify-content:flex-end; gap:8px;">
+                <button onclick="closeTextModal(false)" style="padding:6px 12px; cursor:pointer; background:#f1f5f9; border:1px solid #cbd5e1; border-radius:4px; font-size:12px;">Abbrechen</button>
+                <button onclick="closeTextModal(true)" style="padding:6px 12px; cursor:pointer; background:#1e3a8a; color:white; border:none; border-radius:4px; font-weight:bold; font-size:12px;">Speichern</button>
+            </div>
+        </div>
     </div>
 
     <script>
@@ -140,46 +286,210 @@ def render_html5_taktikboard():
 
         let shapes = []; 
         let history = []; 
-        
         let curveStep = 0;
         let curveP0 = {x: 0, y: 0};
         let curveP2 = {x: 0, y: 0};
-
+        
+        let selectedShapes = [];
+        let clipboard = [];
+        let isSelecting = false;
+        let selStart = {x: 0, y: 0};
+        let selEnd = {x: 0, y: 0};
+        
         let isDragging = false;
         let dragTarget = null; 
         let isLineDrawing = false;
         let lineStart = {x: 0, y: 0};
+        let activeTool = 'move';
 
-        function updateStatus() {
-            const tool = document.getElementById('toolSelect').value;
-            if (tool === 'curve') {
-                if (curveStep === 0) statusBar.innerText = "🎯 Flugkurve: 1. Klick = STARTPUNKT des Balls setzen.";
-                else if (curveStep === 1) statusBar.innerText = "🎯 Flugkurve: 2. Klick = ZIELPUNKT des Balls setzen.";
-                else if (curveStep === 2) statusBar.innerText = "🎯 Flugkurve: Bewege die Maus für den Bogen & klicke zum FIXIEREN!";
-            } else if (tool === 'dot') {
-                statusBar.innerText = "🟡 Spieler: Klicke auf das Feld, um einen gelben/roten Punkt zu setzen.";
-            } else if (tool === 'line' || tool === 'dashed') {
-                statusBar.innerText = "📏 Pass/Laufweg: Drücke & ziehe die Maus vom Start- zum Zielpunkt.";
-            } else if (tool === 'move') {
-                statusBar.innerText = "🧲 Verschieben: Klicke auf einen Punkt, Linie oder Kurve und ziehe sie an die gewünschte Stelle!";
-            }
-        }
-
-        function onToolChange() {
+        function setTool(t) {
+            activeTool = t;
+            document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
+            document.getElementById('btn_' + t).classList.add('active');
             curveStep = 0;
             updateStatus();
             redrawAll();
         }
 
+        function updateStatus() {
+            if (activeTool === 'curve') {
+                if (curveStep === 0) statusBar.innerText = "🎯 Flugkurve: 1. Klick = STARTPUNKT setzen.";
+                else if (curveStep === 1) statusBar.innerText = "🎯 Flugkurve: 2. Klick = ZIELPUNKT setzen.";
+                else if (curveStep === 2) statusBar.innerText = "🎯 Flugkurve: Bewege Maus für Bogen & klicke zum FIXIEREN!";
+            } else if (activeTool === 'line' || activeTool === 'dashed') {
+                statusBar.innerText = "📏 Pass/Laufweg: Klicke auf den freien Rasen & ziehe die Maus.";
+            } else {
+                statusBar.innerText = "💡 Ziehe einen Rahmen über den Rasen, um mehrere Symbole zu markieren!";
+            }
+        }
+
+        function exportShapes() {
+            if (shapes.length === 0) {
+                alert("Es gibt nichts zu exportieren! Das Feld ist leer.");
+                return;
+            }
+            const dataStr = JSON.stringify(shapes);
+            prompt("Kopiere diesen Taktik-Code (Strg+C) und füge ihn in das Textfeld deiner Übung ein:", dataStr);
+            statusBar.innerText = "✅ Taktik-Code bereitgestellt!";
+        }
+
+        function importShapes() {
+            const dataStr = prompt("Füge hier deinen Taktik-Code ein:");
+            if (dataStr) {
+                try {
+                    const parsed = JSON.parse(dataStr);
+                    if (Array.isArray(parsed)) {
+                        saveSnapshot();
+                        shapes = parsed;
+                        selectedShapes = [];
+                        redrawAll();
+                        statusBar.innerText = "📂 Skizze erfolgreich geladen und kann jetzt bearbeitet werden!";
+                    } else {
+                        alert("Das sieht nicht nach einem gültigen Taktik-Code aus.");
+                    }
+                } catch(e) {
+                    alert("Ungültiger Code! Fehler beim Einlesen.");
+                }
+            }
+        }
+
+        function onDragStart(e, type, subtypeOrColor, overrideColor = null) {
+            const data = { type: type };
+            if (type === 'dot') data.color = subtypeOrColor;
+            else if (type === 'utensil') {
+                data.uType = subtypeOrColor;
+                data.color = overrideColor;
+            }
+            e.dataTransfer.setData('text/plain', JSON.stringify(data));
+            e.dataTransfer.effectAllowed = 'copy';
+        }
+
+        drawCanvas.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            e.dataTransfer.dropEffect = 'copy';
+        });
+
+        drawCanvas.addEventListener('drop', (e) => {
+            e.preventDefault();
+            const pos = getPos(e);
+            try {
+                const data = JSON.parse(e.dataTransfer.getData('text/plain'));
+                saveSnapshot();
+                let newShape;
+                if (data.type === 'dot') {
+                    newShape = { type: 'dot', x: pos.x, y: pos.y, color: data.color };
+                    shapes.push(newShape);
+                } else if (data.type === 'utensil') {
+                    newShape = { type: 'utensil', uType: data.uType, x: pos.x, y: pos.y, color: data.color || '#ffffff' };
+                    shapes.push(newShape);
+                }
+                if (newShape) selectedShapes = [newShape];
+                setTool('move');
+                redrawAll();
+            } catch (err) {}
+        });
+
+        const textModal = document.getElementById('textModal');
+        const textModalInput = document.getElementById('textModalInput');
+        let pendingTextPos = null;
+
+        function addTextShape() {
+            pendingTextPos = { x: 275, y: 190 };
+            textModal.style.display = 'block';
+            textModalInput.value = '';
+            textModalInput.focus();
+            statusBar.innerText = "🔤 Gib deinen Text ein.";
+        }
+
+        function closeTextModal(save) {
+            textModal.style.display = 'none';
+            if (save) {
+                const txt = textModalInput.value.trim();
+                if (txt && pendingTextPos) {
+                    saveSnapshot();
+                    let newShape = { type: 'text', text: txt, x: pendingTextPos.x, y: pendingTextPos.y, color: '#000000' };
+                    shapes.push(newShape);
+                    selectedShapes = [newShape]; 
+                    setTool('move');
+                    redrawAll();
+                    statusBar.innerText = "🔤 Text platziert. Du kannst ihn jetzt verschieben.";
+                }
+            } else {
+                updateStatus();
+            }
+            pendingTextPos = null;
+        }
+
+        textModalInput.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter' && e.ctrlKey) {
+                e.preventDefault();
+                const cursorPos = this.selectionStart;
+                const textBefore = this.value.substring(0, cursorPos);
+                const textAfter = this.value.substring(this.selectionEnd, this.value.length);
+                this.value = textBefore + '\\n' + textAfter;
+                this.selectionStart = this.selectionEnd = cursorPos + 1;
+            } else if (e.key === 'Enter' && !e.ctrlKey) {
+                e.preventDefault();
+                closeTextModal(true);
+            }
+        });
+
+        function deleteSelection() {
+            if (selectedShapes.length > 0) {
+                saveSnapshot();
+                shapes = shapes.filter(s => !selectedShapes.includes(s));
+                selectedShapes = [];
+                redrawAll();
+                statusBar.innerText = "🗑️ Auswahl gelöscht.";
+            }
+        }
+
+        function copySelection() {
+            if (selectedShapes.length > 0) {
+                clipboard = JSON.parse(JSON.stringify(selectedShapes));
+                statusBar.innerText = `📋 ${clipboard.length} Objekt(e) kopiert!`;
+            }
+        }
+
+        function pasteSelection() {
+            if (clipboard.length > 0) {
+                saveSnapshot();
+                selectedShapes = [];
+                const newShapes = JSON.parse(JSON.stringify(clipboard));
+                newShapes.forEach(s => {
+                    const offset = 20;
+                    if (s.x !== undefined) { s.x += offset; s.y += offset; }
+                    if (s.x1 !== undefined) { s.x1 += offset; s.y1 += offset; s.x2 += offset; s.y2 += offset; }
+                    if (s.x0 !== undefined) { s.x0 += offset; s.y0 += offset; s.cx += offset; s.cy += offset; s.x2 += offset; s.y2 += offset; }
+                    shapes.push(s);
+                    selectedShapes.push(s);
+                });
+                clipboard = JSON.parse(JSON.stringify(newShapes)); 
+                setTool('move');
+                redrawAll();
+                statusBar.innerText = "📥 Objekte eingefügt!";
+            }
+        }
+
+        window.addEventListener('keydown', function(e) {
+            if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
+            
+            if (e.key === 'Delete' || e.key === 'Backspace') {
+                deleteSelection();
+            } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+                copySelection();
+            } else if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
+                pasteSelection();
+            }
+        });
+
         function drawPitch() {
             const type = document.getElementById('templateSelect').value;
             const w = 550, h = 380;
             
-            // Rasengrün
             pitchCtx.fillStyle = "#2e7d32";
             pitchCtx.fillRect(0, 0, w, h);
             
-            // Rasenstreifen
             pitchCtx.fillStyle = "#388e3c";
             for(let i=0; i<w; i+=50) {
                 if((i/50)%2 === 0) pitchCtx.fillRect(i, 0, 50, h);
@@ -188,447 +498,818 @@ def render_html5_taktikboard():
             pitchCtx.strokeStyle = "#ffffff";
             pitchCtx.lineWidth = 3;
 
-            if(type === "Eckball") {
+            if(type === "EinTor") {
                 const goalLineY = 350;
-                const penaltyBoxTopY = 180;
-                const penaltySpotY = 250;
-                const centerX = 275;
-
-                pitchCtx.beginPath(); pitchCtx.moveTo(30, goalLineY); pitchCtx.lineTo(w-30, goalLineY); pitchCtx.stroke();
-                pitchCtx.beginPath(); pitchCtx.moveTo(30, 30); pitchCtx.lineTo(30, goalLineY); pitchCtx.stroke();
-                pitchCtx.beginPath(); pitchCtx.moveTo(w-30, 30); pitchCtx.lineTo(w-30, goalLineY); pitchCtx.stroke();
-                
-                pitchCtx.strokeRect(100, penaltyBoxTopY, 350, 170);
-                pitchCtx.strokeRect(180, 290, 190, 60);
-                
-                pitchCtx.fillStyle = "#e2e8f0";
-                pitchCtx.fillRect(210, goalLineY, 130, 18);
-                pitchCtx.strokeRect(210, goalLineY, 130, 18);
-                
-                pitchCtx.fillStyle = "#ffffff";
-                pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, 4, 0, Math.PI*2); pitchCtx.fill();
-                
-                const alpha = Math.acos(70 / 95);
-                pitchCtx.beginPath();
-                pitchCtx.arc(centerX, penaltySpotY, 95, 1.5 * Math.PI - alpha, 1.5 * Math.PI + alpha);
-                pitchCtx.stroke();
-
-                pitchCtx.beginPath(); pitchCtx.arc(30, goalLineY, 18, -Math.PI/2, 0); pitchCtx.stroke();
-                pitchCtx.beginPath(); pitchCtx.arc(w-30, goalLineY, 18, Math.PI, Math.PI*1.5); pitchCtx.stroke();
-            } else {
-                const goalLineY = 350;
-                const penaltyBoxTopY = 210;
-                const penaltySpotY = 275;
+                const penaltyBoxTopY = 200;
+                const penaltySpotY = 270;
                 const centerX = 275;
 
                 pitchCtx.strokeRect(30, 30, w-60, h-60);
-                pitchCtx.beginPath(); pitchCtx.moveTo(30, 30); pitchCtx.lineTo(w-30, 30); pitchCtx.stroke();
-                pitchCtx.beginPath(); pitchCtx.arc(centerX, 30, 65, 0, Math.PI); pitchCtx.stroke();
-                pitchCtx.fillStyle = "#ffffff";
-                pitchCtx.beginPath(); pitchCtx.arc(centerX, 30, 4, 0, Math.PI*2); pitchCtx.fill();
-
-                pitchCtx.strokeRect(115, penaltyBoxTopY, 320, 140);
-                pitchCtx.strokeRect(190, 305, 170, 45);
+                pitchCtx.strokeRect(100, penaltyBoxTopY, 350, 150);
+                pitchCtx.strokeRect(180, 290, 190, 60);
                 
                 pitchCtx.fillStyle = "#e2e8f0";
-                pitchCtx.fillRect(220, goalLineY, 110, 14);
-                pitchCtx.strokeRect(220, goalLineY, 110, 14);
-
+                pitchCtx.fillRect(215, goalLineY, 120, 16);
+                pitchCtx.strokeRect(215, goalLineY, 120, 16);
+                
                 pitchCtx.fillStyle = "#ffffff";
                 pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, 4, 0, Math.PI*2); pitchCtx.fill();
                 
-                const alpha2 = Math.acos(65 / 85);
+                const arcRadius = 85;
+                const yDist = penaltySpotY - penaltyBoxTopY; 
+                const intersectAngle = Math.asin(yDist / arcRadius);
+                
                 pitchCtx.beginPath();
-                pitchCtx.arc(centerX, penaltySpotY, 85, 1.5 * Math.PI - alpha2, 1.5 * Math.PI + alpha2);
+                pitchCtx.arc(centerX, penaltySpotY, arcRadius, Math.PI + intersectAngle, Math.PI * 2 - intersectAngle);
                 pitchCtx.stroke();
+                
+            } else if (type === "ZweiTore") {
+                const centerX = 275;
+                pitchCtx.strokeRect(30, 30, w-60, h-60);
+                pitchCtx.beginPath(); pitchCtx.moveTo(30, h/2); pitchCtx.lineTo(w-30, h/2); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, h/2, 50, 0, Math.PI*2); pitchCtx.stroke();
+                pitchCtx.fillStyle = "#ffffff";
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, h/2, 4, 0, Math.PI*2); pitchCtx.fill();
+                
+                pitchCtx.strokeRect(100, 270, 350, 80);
+                pitchCtx.strokeRect(180, 320, 190, 30);
+                pitchCtx.fillStyle = "#e2e8f0"; pitchCtx.fillRect(215, 350, 120, 16); pitchCtx.strokeRect(215, 350, 120, 16);
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, 290, 4, 0, Math.PI*2); pitchCtx.fill();
+                
+                pitchCtx.strokeRect(100, 30, 350, 80);
+                pitchCtx.strokeRect(180, 30, 190, 30);
+                pitchCtx.fillStyle = "#e2e8f0"; pitchCtx.fillRect(215, 14, 120, 16); pitchCtx.strokeRect(215, 14, 120, 16);
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, 90, 4, 0, Math.PI*2); pitchCtx.fill();
+            } else {
+                pitchCtx.strokeRect(30, 30, w-60, h-60);
             }
         }
 
-        function resetPitch() {
-            drawPitch();
-            curveStep = 0;
-            updateStatus();
-        }
+        function resetPitch() { drawPitch(); curveStep = 0; updateStatus(); }
 
         function drawArrowHead(ctx, fromX, fromY, toX, toY, color) {
-            const headlen = 13;
-            const dx = toX - fromX;
-            const dy = toY - fromY;
-            const angle = Math.atan2(dy, dx);
-            ctx.fillStyle = color;
-            ctx.beginPath();
+            const headlen = 13; const dx = toX - fromX; const dy = toY - fromY; const angle = Math.atan2(dy, dx);
+            ctx.fillStyle = color; ctx.beginPath();
             ctx.moveTo(toX, toY);
             ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
             ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
-            ctx.closePath();
-            ctx.fill();
+            ctx.closePath(); ctx.fill();
         }
 
         function redrawAll() {
             drawCtx.clearRect(0, 0, 550, 380);
-            const tool = document.getElementById('toolSelect').value;
 
             shapes.forEach(s => {
                 drawCtx.strokeStyle = s.color;
                 drawCtx.fillStyle = s.color;
 
                 if (s.type === 'dot') {
-                    drawCtx.beginPath();
-                    drawCtx.arc(s.x, s.y, 11, 0, Math.PI * 2);
-                    drawCtx.fill();
-                    drawCtx.strokeStyle = "#ffffff";
-                    drawCtx.lineWidth = 2;
-                    drawCtx.stroke();
+                    drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 11, 0, Math.PI * 2); drawCtx.fill();
+                    drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 2; drawCtx.stroke();
                 } else if (s.type === 'line' || s.type === 'dashed') {
-                    drawCtx.lineWidth = 4;
-                    drawCtx.setLineDash(s.type === 'dashed' ? [8, 6] : []);
-                    drawCtx.beginPath();
-                    drawCtx.moveTo(s.x1, s.y1);
-                    drawCtx.lineTo(s.x2, s.y2);
-                    drawCtx.stroke();
-                    drawCtx.setLineDash([]);
-                    drawArrowHead(drawCtx, s.x1, s.y1, s.x2, s.y2, s.color);
+                    drawCtx.lineWidth = 4; drawCtx.setLineDash(s.type === 'dashed' ? [8, 6] : []);
+                    drawCtx.beginPath(); drawCtx.moveTo(s.x1, s.y1); drawCtx.lineTo(s.x2, s.y2); drawCtx.stroke();
+                    drawCtx.setLineDash([]); drawArrowHead(drawCtx, s.x1, s.y1, s.x2, s.y2, s.color);
                 } else if (s.type === 'curve') {
-                    drawCtx.lineWidth = 4;
-                    drawCtx.beginPath();
-                    drawCtx.moveTo(s.x0, s.y0);
-                    drawCtx.quadraticCurveTo(s.cx, s.cy, s.x2, s.y2);
-                    drawCtx.stroke();
+                    drawCtx.lineWidth = 4; drawCtx.beginPath(); drawCtx.moveTo(s.x0, s.y0);
+                    drawCtx.quadraticCurveTo(s.cx, s.cy, s.x2, s.y2); drawCtx.stroke();
                     drawArrowHead(drawCtx, s.cx, s.cy, s.x2, s.y2, s.color);
-                }
-
-                if (tool === 'move') {
-                    drawCtx.strokeStyle = "#facc15";
-                    drawCtx.lineWidth = 2;
-                    if (s.type === 'dot') {
-                        drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 15, 0, Math.PI * 2); drawCtx.stroke();
-                    } else if (s.type === 'curve') {
-                        drawCtx.beginPath(); drawCtx.arc(s.cx, s.cy, 7, 0, Math.PI * 2); drawCtx.stroke();
-                        drawCtx.beginPath(); drawCtx.arc(s.x0, s.y0, 6, 0, Math.PI * 2); drawCtx.stroke();
-                        drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 6, 0, Math.PI * 2); drawCtx.stroke();
-                    } else if (s.type === 'line' || s.type === 'dashed') {
-                        drawCtx.beginPath(); drawCtx.arc(s.x1, s.y1, 6, 0, Math.PI * 2); drawCtx.stroke();
-                        drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 6, 0, Math.PI * 2); drawCtx.stroke();
+                } else if (s.type === 'text') {
+                    drawCtx.font = "bold 15px Arial";
+                    drawCtx.shadowColor = "rgba(255,255,255,0.7)"; drawCtx.shadowBlur = 4;
+                    const lines = s.text.split('\\n');
+                    for (let i = 0; i < lines.length; i++) {
+                        drawCtx.fillText(lines[i], s.x - 10, s.y + 5 + (i * 18));
+                    }
+                    drawCtx.shadowBlur = 0;
+                } else if (s.type === 'utensil') {
+                    if (s.uType === 'cone') {
+                        drawCtx.fillStyle = "#ea580c"; drawCtx.beginPath();
+                        drawCtx.moveTo(s.x, s.y - 10); drawCtx.lineTo(s.x + 10, s.y + 10); drawCtx.lineTo(s.x - 10, s.y + 10); drawCtx.fill();
+                    } else if (s.uType === 'pole') {
+                        drawCtx.strokeStyle = "#facc15"; drawCtx.lineWidth = 4;
+                        drawCtx.beginPath(); drawCtx.moveTo(s.x, s.y + 12); drawCtx.lineTo(s.x, s.y - 12); drawCtx.stroke();
+                        drawCtx.fillStyle = "#000"; drawCtx.beginPath(); drawCtx.arc(s.x, s.y + 12, 4, 0, Math.PI*2); drawCtx.fill();
+                    } else if (s.uType === 'minigoal') {
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 4; 
+                        drawCtx.strokeRect(s.x - 20, s.y - 5, 40, 10);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1; drawCtx.beginPath();
+                        for(let i=-15; i<=15; i+=5) { drawCtx.moveTo(s.x + i, s.y - 5); drawCtx.lineTo(s.x + i, s.y + 5); }
+                        drawCtx.stroke();
+                    } else if (s.uType === 'minigoal_v') {
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 4; 
+                        drawCtx.strokeRect(s.x - 5, s.y - 20, 10, 40);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1; drawCtx.beginPath();
+                        for(let i=-15; i<=15; i+=5) { drawCtx.moveTo(s.x - 5, s.y + i); drawCtx.lineTo(s.x + 5, s.y + i); }
+                        drawCtx.stroke();
+                    } else if (s.uType === 'largegoal') {
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 5; 
+                        drawCtx.strokeRect(s.x - 45, s.y - 10, 90, 20);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1.5; drawCtx.beginPath();
+                        for(let i=-40; i<=40; i+=8) { drawCtx.moveTo(s.x + i, s.y - 10); drawCtx.lineTo(s.x + i, s.y + 10); }
+                        for(let j=-5; j<=5; j+=5) { drawCtx.moveTo(s.x - 45, s.y + j); drawCtx.lineTo(s.x + 45, s.y + j); }
+                        drawCtx.stroke();
+                    } else if (s.uType === 'largegoal_v') {
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 5; 
+                        drawCtx.strokeRect(s.x - 10, s.y - 45, 20, 90);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1.5; drawCtx.beginPath();
+                        for(let i=-40; i<=40; i+=8) { drawCtx.moveTo(s.x - 10, s.y + i); drawCtx.lineTo(s.x + 10, s.y + i); }
+                        for(let j=-5; j<=5; j+=5) { drawCtx.moveTo(s.x + j, s.y - 45); drawCtx.lineTo(s.x + j, s.y + 45); }
+                        drawCtx.stroke();
                     }
                 }
             });
-        }
 
-        function saveSnapshot() {
-            history.push(JSON.parse(JSON.stringify(shapes)));
-        }
+            // Highlights
+            selectedShapes.forEach(s => {
+                drawCtx.strokeStyle = "#3b82f6"; 
+                drawCtx.lineWidth = 2;
+                drawCtx.setLineDash([4, 4]);
+                
+                if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') {
+                    drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 22, 0, Math.PI * 2); drawCtx.stroke();
+                } else if (s.type === 'line' || s.type === 'dashed') {
+                    drawCtx.beginPath(); drawCtx.arc(s.x1, s.y1, 10, 0, Math.PI * 2); drawCtx.stroke();
+                    drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 10, 0, Math.PI * 2); drawCtx.stroke();
+                    let midX = (s.x1 + s.x2) / 2; let midY = (s.y1 + s.y2) / 2;
+                    drawCtx.beginPath(); drawCtx.arc(midX, midY, 14, 0, Math.PI * 2); drawCtx.stroke();
+                } else if (s.type === 'curve') {
+                    drawCtx.beginPath(); drawCtx.arc(s.x0, s.y0, 10, 0, Math.PI * 2); drawCtx.stroke();
+                    drawCtx.beginPath(); drawCtx.arc(s.x2, s.y2, 10, 0, Math.PI * 2); drawCtx.stroke();
+                    let midX = (s.x0 + s.x2) / 2; let midY = (s.y0 + s.y2) / 2;
+                    drawCtx.beginPath(); drawCtx.arc(midX, midY, 14, 0, Math.PI * 2); drawCtx.stroke();
+                }
+                drawCtx.setLineDash([]);
+            });
 
-        function undoLast() {
-            curveStep = 0;
-            if (history.length > 0) {
-                shapes = history.pop();
-                redrawAll();
+            // Selektions-Rechteck
+            if (isSelecting) {
+                drawCtx.fillStyle = "rgba(59, 130, 246, 0.2)";
+                drawCtx.strokeStyle = "rgba(59, 130, 246, 0.8)";
+                drawCtx.lineWidth = 1;
+                drawCtx.fillRect(selStart.x, selStart.y, selEnd.x - selStart.x, selEnd.y - selStart.y);
+                drawCtx.strokeRect(selStart.x, selStart.y, selEnd.x - selStart.x, selEnd.y - selStart.y);
             }
-            updateStatus();
         }
 
-        function clearDrawings() {
-            curveStep = 0;
-            shapes = [];
-            history = [];
-            drawCtx.clearRect(0, 0, 550, 380);
-            updateStatus();
-        }
-
-        function getPos(e) {
-            const rect = drawCanvas.getBoundingClientRect();
-            return { x: e.clientX - rect.left, y: e.clientY - rect.top };
-        }
+        function saveSnapshot() { history.push(JSON.parse(JSON.stringify(shapes))); }
+        function undoLast() { curveStep = 0; if (history.length > 0) { shapes = history.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
+        function clearDrawings() { curveStep = 0; shapes = []; history = []; selectedShapes = []; drawCtx.clearRect(0, 0, 550, 380); updateStatus(); }
+        function getPos(e) { const rect = drawCanvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
 
         function getHitHandle(pos) {
             for (let i = shapes.length - 1; i >= 0; i--) {
                 let s = shapes[i];
-                if (s.type === 'dot') {
-                    if (Math.hypot(s.x - pos.x, s.y - pos.y) <= 18) {
-                        return { shape: s, handle: 'center' };
-                    }
+                if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') {
+                    if (Math.hypot(s.x - pos.x, s.y - pos.y) <= 22) return { shape: s, handle: 'center' };
                 } else if (s.type === 'line' || s.type === 'dashed') {
                     if (Math.hypot(s.x1 - pos.x, s.y1 - pos.y) <= 16) return { shape: s, handle: 'start' };
                     if (Math.hypot(s.x2 - pos.x, s.y2 - pos.y) <= 16) return { shape: s, handle: 'end' };
+                    let midX = (s.x1 + s.x2) / 2; let midY = (s.y1 + s.y2) / 2;
+                    if (Math.hypot(midX - pos.x, midY - pos.y) <= 20) return { shape: s, handle: 'center' };
                 } else if (s.type === 'curve') {
                     if (Math.hypot(s.x0 - pos.x, s.y0 - pos.y) <= 16) return { shape: s, handle: 'start' };
-                    if (Math.hypot(s.cx - pos.x, s.cy - pos.y) <= 18) return { shape: s, handle: 'control' };
+                    if (Math.hypot(s.cx - pos.x, s.cy - pos.y) <= 16) return { shape: s, handle: 'control' };
                     if (Math.hypot(s.x2 - pos.x, s.y2 - pos.y) <= 16) return { shape: s, handle: 'end' };
+                    let midX = (s.x0 + s.x2) / 2; let midY = (s.y0 + s.y2) / 2;
+                    if (Math.hypot(midX - pos.x, midY - pos.y) <= 22) return { shape: s, handle: 'center' };
                 }
-            }
-            return null;
+            } return null;
         }
 
         function downloadSketch() {
-            const combinedCanvas = document.createElement('canvas');
-            combinedCanvas.width = 550;
-            combinedCanvas.height = 380;
+            selectedShapes = []; redrawAll();
+            const combinedCanvas = document.createElement('canvas'); combinedCanvas.width = 550; combinedCanvas.height = 380;
             const combCtx = combinedCanvas.getContext('2d');
-            combCtx.drawImage(pitchCanvas, 0, 0);
-            combCtx.drawImage(drawCanvas, 0, 0);
-
-            const link = document.createElement('a');
-            link.download = 'taktik_skizze.png';
-            link.href = combinedCanvas.toDataURL('image/png');
-            link.click();
+            combCtx.drawImage(pitchCanvas, 0, 0); combCtx.drawImage(drawCanvas, 0, 0);
+            const link = document.createElement('a'); link.download = 'taktik_skizze.png'; link.href = combinedCanvas.toDataURL('image/png'); link.click();
         }
 
-        drawCanvas.addEventListener('mousedown', (e) => {
+        // --- MAUS EVENTS ---
+        
+        drawCanvas.addEventListener('dblclick', (e) => {
             const pos = getPos(e);
-            const tool = document.getElementById('toolSelect').value;
-            const color = document.getElementById('colorSelect').value;
-
-            if (tool === 'move') {
-                const hit = getHitHandle(pos);
-                if (hit) {
-                    saveSnapshot();
-                    isDragging = true;
-                    dragTarget = hit;
-                }
-            } 
-            else if (tool === 'dot') {
+            const hit = getHitHandle(pos);
+            if (hit) {
                 saveSnapshot();
-                shapes.push({ type: 'dot', x: pos.x, y: pos.y, color: color });
+                shapes = shapes.filter(s => s !== hit.shape);
+                selectedShapes = selectedShapes.filter(s => s !== hit.shape);
+                isDragging = false;
+                dragTarget = null;
                 redrawAll();
-            } 
-            else if (tool === 'curve') {
-                if (curveStep === 0) {
-                    curveP0 = pos;
-                    curveStep = 1;
-                    updateStatus();
-                } else if (curveStep === 1) {
-                    curveP2 = pos;
-                    curveStep = 2;
-                    updateStatus();
-                } else if (curveStep === 2) {
+                statusBar.innerText = "🗑️ Symbol gelöscht!";
+            }
+        });
+
+        drawCanvas.addEventListener('mousedown', (e) => {
+            const pos = getPos(e); 
+            
+            const hit = getHitHandle(pos);
+            if (activeTool === 'move') {
+                if (hit) {
+                    saveSnapshot(); 
+                    isDragging = true; 
+                    dragTarget = hit; 
+                    dragTarget.lastX = pos.x; 
+                    dragTarget.lastY = pos.y; 
+                    
+                    if (!selectedShapes.includes(hit.shape)) {
+                        selectedShapes = [hit.shape];
+                    }
+                    redrawAll();
+                    return;
+                } else {
+                    selectedShapes = [];
+                    isSelecting = true;
+                    selStart = pos;
+                    selEnd = pos;
+                    redrawAll();
+                    return;
+                }
+            }
+
+            const drawColor = "#ffffff"; 
+            if (activeTool === 'curve') {
+                if (curveStep === 0) { curveP0 = pos; curveStep = 1; updateStatus(); } 
+                else if (curveStep === 1) { curveP2 = pos; curveStep = 2; updateStatus(); } 
+                else if (curveStep === 2) {
                     saveSnapshot();
-                    shapes.push({
-                        type: 'curve',
-                        x0: curveP0.x, y0: curveP0.y,
-                        cx: pos.x, cy: pos.y,
-                        x2: curveP2.x, y2: curveP2.y,
-                        color: color
-                    });
-                    curveStep = 0;
-                    updateStatus();
+                    let newShape = { type: 'curve', x0: curveP0.x, y0: curveP0.y, cx: pos.x, cy: pos.y, x2: curveP2.x, y2: curveP2.y, color: drawColor };
+                    shapes.push(newShape);
+                    selectedShapes = [];
+                    curveStep = 0; 
                     redrawAll();
                 }
-            } 
-            else if (tool === 'line' || tool === 'dashed') {
-                isLineDrawing = true;
-                lineStart = pos;
+            } else if (activeTool === 'line' || activeTool === 'dashed') { 
+                isLineDrawing = true; 
+                lineStart = pos; 
             }
         });
 
         drawCanvas.addEventListener('mousemove', (e) => {
-            const pos = getPos(e);
-            const tool = document.getElementById('toolSelect').value;
-            const color = document.getElementById('colorSelect').value;
+            const pos = getPos(e); 
+            const drawColor = "#ffffff";
 
             if (isDragging && dragTarget) {
-                const s = dragTarget.shape;
-                const h = dragTarget.handle;
-                if (s.type === 'dot') {
-                    s.x = pos.x; s.y = pos.y;
-                } else if (s.type === 'line' || s.type === 'dashed') {
-                    if (h === 'start') { s.x1 = pos.x; s.y1 = pos.y; }
-                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; }
-                } else if (s.type === 'curve') {
-                    if (h === 'start') { s.x0 = pos.x; s.y0 = pos.y; }
-                    else if (h === 'control') { s.cx = pos.x; s.cy = pos.y; }
-                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; }
+                const dx = pos.x - dragTarget.lastX;
+                const dy = pos.y - dragTarget.lastY;
+
+                if (selectedShapes.length > 1 && selectedShapes.includes(dragTarget.shape)) {
+                    selectedShapes.forEach(s => {
+                        if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') { 
+                            s.x += dx; s.y += dy; 
+                        } else if (s.type === 'line' || s.type === 'dashed') { 
+                            s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; 
+                        } else if (s.type === 'curve') { 
+                            s.x0 += dx; s.y0 += dy; s.cx += dx; s.cy += dy; s.x2 += dx; s.y2 += dy; 
+                        }
+                    });
+                } else {
+                    const s = dragTarget.shape; 
+                    const h = dragTarget.handle;
+                    
+                    if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') { 
+                        s.x = pos.x; s.y = pos.y; 
+                    }
+                    else if (s.type === 'line' || s.type === 'dashed') { 
+                        if (h === 'start') { s.x1 = pos.x; s.y1 = pos.y; } 
+                        else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; } 
+                        else if (h === 'center') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
+                    }
+                    else if (s.type === 'curve') { 
+                        if (h === 'start') { s.x0 = pos.x; s.y0 = pos.y; } 
+                        else if (h === 'control') { s.cx = pos.x; s.cy = pos.y; } 
+                        else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; } 
+                        else if (h === 'center') { s.x0 += dx; s.y0 += dy; s.cx += dx; s.cy += dy; s.x2 += dx; s.y2 += dy; }
+                    }
                 }
+                
+                dragTarget.lastX = pos.x;
+                dragTarget.lastY = pos.y;
                 redrawAll();
-            } 
-            else if (tool === 'curve') {
+            } else if (isSelecting) {
+                selEnd = pos;
+                redrawAll();
+            } else if (activeTool === 'curve') {
                 if (curveStep === 1) {
-                    redrawAll();
-                    drawCtx.strokeStyle = color;
-                    drawCtx.lineWidth = 2;
-                    drawCtx.setLineDash([4, 4]);
-                    drawCtx.beginPath();
-                    drawCtx.moveTo(curveP0.x, curveP0.y);
-                    drawCtx.lineTo(pos.x, pos.y);
-                    drawCtx.stroke();
-                    drawCtx.setLineDash([]);
+                    redrawAll(); drawCtx.strokeStyle = drawColor; drawCtx.lineWidth = 2; drawCtx.setLineDash([4, 4]); drawCtx.beginPath(); drawCtx.moveTo(curveP0.x, curveP0.y); drawCtx.lineTo(pos.x, pos.y); drawCtx.stroke(); drawCtx.setLineDash([]);
                 } else if (curveStep === 2) {
-                    redrawAll();
-                    drawCtx.strokeStyle = color;
-                    drawCtx.lineWidth = 4;
-                    drawCtx.beginPath();
-                    drawCtx.moveTo(curveP0.x, curveP0.y);
-                    drawCtx.quadraticCurveTo(pos.x, pos.y, curveP2.x, curveP2.y);
-                    drawCtx.stroke();
-                    drawArrowHead(drawCtx, pos.x, pos.y, curveP2.x, curveP2.y, color);
+                    redrawAll(); drawCtx.strokeStyle = drawColor; drawCtx.lineWidth = 4; drawCtx.beginPath(); drawCtx.moveTo(curveP0.x, curveP0.y); drawCtx.quadraticCurveTo(pos.x, pos.y, curveP2.x, curveP2.y); drawCtx.stroke(); drawArrowHead(drawCtx, pos.x, pos.y, curveP2.x, curveP2.y, drawColor);
                 }
-            } 
-            else if (isLineDrawing) {
-                redrawAll();
-                drawCtx.strokeStyle = color;
-                drawCtx.lineWidth = 4;
-                drawCtx.setLineDash(tool === 'dashed' ? [8, 6] : []);
-                drawCtx.beginPath();
-                drawCtx.moveTo(lineStart.x, lineStart.y);
-                drawCtx.lineTo(pos.x, pos.y);
-                drawCtx.stroke();
-                drawCtx.setLineDash([]);
-                drawArrowHead(drawCtx, lineStart.x, lineStart.y, pos.x, pos.y, color);
+            } else if (isLineDrawing) {
+                redrawAll(); drawCtx.strokeStyle = drawColor; drawCtx.lineWidth = 4; drawCtx.setLineDash(activeTool === 'dashed' ? [8, 6] : []); drawCtx.beginPath(); drawCtx.moveTo(lineStart.x, lineStart.y); drawCtx.lineTo(pos.x, pos.y); drawCtx.stroke(); drawCtx.setLineDash([]); drawArrowHead(drawCtx, lineStart.x, lineStart.y, pos.x, pos.y, drawColor);
             }
         });
 
         drawCanvas.addEventListener('mouseup', (e) => {
-            const pos = getPos(e);
-            const tool = document.getElementById('toolSelect').value;
-            const color = document.getElementById('colorSelect').value;
+            const pos = getPos(e); 
+            const drawColor = "#ffffff";
+            if (isDragging) { 
+                isDragging = false; 
+                dragTarget = null; 
+            } else if (isSelecting) {
+                isSelecting = false;
+                
+                const minX = Math.min(selStart.x, selEnd.x);
+                const maxX = Math.max(selStart.x, selEnd.x);
+                const minY = Math.min(selStart.y, selEnd.y);
+                const maxY = Math.max(selStart.y, selEnd.y);
 
-            if (isDragging) {
-                isDragging = false;
-                dragTarget = null;
-            } 
-            else if (isLineDrawing) {
-                isLineDrawing = false;
-                saveSnapshot();
-                shapes.push({
-                    type: tool,
-                    x1: lineStart.x, y1: lineStart.y,
-                    x2: pos.x, y2: pos.y,
-                    color: color
+                selectedShapes = shapes.filter(s => {
+                    if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') {
+                        return s.x >= minX && s.x <= maxX && s.y >= minY && s.y <= maxY;
+                    } else if (s.type === 'line' || s.type === 'dashed') {
+                        return s.x1 >= minX && s.x1 <= maxX && s.y1 >= minY && s.y1 <= maxY &&
+                               s.x2 >= minX && s.x2 <= maxX && s.y2 >= minY && s.y2 <= maxY;
+                    } else if (s.type === 'curve') {
+                        return s.x0 >= minX && s.x0 <= maxX && s.y0 >= minY && s.y0 <= maxY &&
+                               s.x2 >= minX && s.x2 <= maxX && s.y2 >= minY && s.y2 <= maxY;
+                    }
+                    return false;
                 });
+                
                 redrawAll();
+                if (selectedShapes.length > 0) {
+                    statusBar.innerText = `✅ ${selectedShapes.length} Objekte markiert.`;
+                } else {
+                    updateStatus();
+                }
+            } else if (isLineDrawing) { 
+                isLineDrawing = false; 
+                saveSnapshot(); 
+                let newShape = { type: activeTool, x1: lineStart.x, y1: lineStart.y, x2: pos.x, y2: pos.y, color: drawColor };
+                shapes.push(newShape); 
+                selectedShapes = []; 
+                redrawAll(); 
             }
         });
 
-        drawPitch();
-        updateStatus();
+        drawPitch(); updateStatus();
     </script>
     </body>
     </html>
     """
-    st.components.v1.html(html_code, height=480)
+    st.components.v1.html(html_code, height=540)
 
 # --- INTELLIGENTER JSON-SLICER ---
 def extract_json_array(text):
-    text = re.sub(r'```(?:json)?', '', text, flags=re.IGNORECASE).strip()
-    start_idx = text.find('[')
-    if start_idx != -1:
-        bracket_count = 0
-        in_string = False
-        escape = False
-        for i in range(start_idx, len(text)):
-            char = text[i]
-            if escape: escape = False; continue
-            if char == '\\': escape = True; continue
-            if char == '"': in_string = not in_string; continue
-            if not in_string:
-                if char == '[': bracket_count += 1
-                elif char == ']':
-                    bracket_count -= 1
-                    if bracket_count == 0: return text[start_idx:i+1]
-    return text
-
-# --- BESCHLEUNIGTE GEMINI-ABFRAGE ---
-def get_gemini_json_text(prompt, api_key):
-    genai.configure(api_key=api_key.strip())
-    fast_models = ['gemini-1.5-flash', 'models/gemini-1.5-flash', 'models/gemini-2.0-flash', 'models/gemini-pro']
-    
-    last_err = None
-    for m in fast_models:
+    import json
+    text = text.strip()
+    if "```" in text:
+        text = re.sub(r"```[a-zA-Z]*\n?", "", text).replace("```", "").strip()
+        
+    # Plan A: Wenn die KI sauberes JSON liefert, direkt durchwinken
+    try:
+        json.loads(text)
+        return text
+    except Exception:
+        pass
+        
+    # Plan B (Der Ausputzer): Ignoriert alle Fehler und fischt nur die echten JSON-Objekte raus
+    objekte = []
+    decoder = json.JSONDecoder()
+    idx = 0
+    while idx < len(text):
+        start = text.find('{', idx)
+        if start == -1:
+            break
         try:
-            model = genai.GenerativeModel(m, generation_config={"response_mime_type": "application/json"})
-            res = model.generate_content(prompt)
-            if res and res.text: return res.text
-        except Exception as e:
-            last_err = e
-            continue
+            # raw_decode liest genau EIN valides Objekt und sagt uns, wo es endet
+            obj, parsed_len = decoder.raw_decode(text[start:])
+            objekte.append(json.dumps(obj))
+            idx = start + parsed_len
+        except Exception:
+            idx = start + 1
             
-    if last_err: raise last_err
-    raise Exception("Kein aktives Gemini-Modell gefunden. Bitte prüfe deinen API-Key!")
+    if objekte:
+        return "[" + ", ".join(objekte) + "]"
+        
+    return text
+# ==============================================================================
+# 2. STABILE KI-ABFRAGE (MIT SICHERHEITS-CHECK & FEHLER-DETEKTOR)
+# ==============================================================================
+# ==============================================================================
+# DYNAMISCHE KI-ABFRAGE (OHNE FESTE MODELLNAMEN / 404-SICHER)
+# ==============================================================================
+def get_gemini_json_text(prompt, api_key):
+  key = api_key.strip()
+
+  # 1. Direkt bei Google abfragen, welche Modelle für deinen Key JETZT exakt existieren
+  list_url = f'https://generativelanguage.googleapis.com/v1beta/models?key={key}'
+  try:
+    res = requests.get(list_url, timeout=10)
+    if res.status_code != 200:
+      list_url = f'https://generativelanguage.googleapis.com/v1/models?key={key}'
+      res = requests.get(list_url, timeout=10)
+
+    if res.status_code != 200:
+      raise Exception(f'API-Key abgelehnt (Status {res.status_code})')
+
+    data = res.json()
+    # Nur Modelle filtern, die für Textgenerierung freigeschaltet sind
+    available_models = [
+        m['name']
+        for m in data.get('models', [])
+        if 'generateContent' in m.get('supportedGenerationMethods', [])
+    ]
+
+    if not available_models:
+      raise Exception(
+          'Kein freigeschaltetes Gemini-Modell für diesen API-Key gefunden.'
+      )
+  except Exception as e:
+    raise Exception(f'Modell-Liste konnte nicht geladen werden: {e}')
+
+  # 2. Bevorzugte Reihenfolge festlegen (Schnelle Flash-Modelle zuerst)
+  preferred_order = [
+      'models/gemini-2.0-flash',
+      'models/gemini-2.5-flash',
+      'models/gemini-1.5-flash',
+      'models/gemini-1.5-pro',
+  ]
+  sorted_models = sorted(
+      available_models,
+      key=lambda m: (
+          preferred_order.index(m) if m in preferred_order else 99
+      ),
+  )
+
+  api_version = 'v1beta' if 'v1beta' in list_url else 'v1'
+  last_err = ''
+
+  # 3. Schleife NUR durch die Modelle, die Google wirklich für dich gelistet hat
+  for model_name in sorted_models:
+    url = f'https://generativelanguage.googleapis.com/{api_version}/{model_name}:generateContent?key={key}'
+    payload = {
+        'contents': [{'parts': [{'text': prompt}]}],
+        'generationConfig': {'responseMimeType': 'application/json'},
+    }
+
+    try:
+      response = requests.post(url, json=payload, timeout=25)
+
+      if response.status_code == 200:
+        res_data = response.json()
+        if 'candidates' in res_data and res_data['candidates']:
+          cand = res_data['candidates'][0]
+          if cand.get('finishReason') == 'SAFETY':
+            last_err = f'{model_name}: Wegen Sicherheitsfilter blockiert'
+            continue
+          parts = cand.get('content', {}).get('parts', [])
+          if parts:
+            return parts[0]['text']
+      elif response.status_code == 429:
+        last_err = f'{model_name}: Gratis-Limit erreicht (429)'
+        continue
+      else:
+        last_err = f'{model_name}: HTTP {response.status_code}'
+    except Exception as e:
+      last_err = str(e)
+      continue
+
+  raise Exception(
+      f'Kein verfügbares Modell konnte die Anfrage verarbeiten. Letzter Status:'
+      f' {last_err}'
+  )
 
 # --- ECHTE GEMINI KI-GENERATOREN ---
 def generiere_echte_ki_fragen(thema, api_key):
     if not HAS_GEMINI_LIB or not api_key: return None
     try:
-        prompt = f"Erstelle 2 Multiple-Choice-Taktikfragen für U13-Fußballer zum Thema '{thema}' als JSON-Array mit question, options, correct, points."
+        prompt = (f"Erstelle exakt 2 Multiple-Choice-Taktikfragen für U13-Fußballer zum Thema '{thema}'.\n"
+                  "GIB AUSSCHLIESSLICH EIN SAUBERES JSON-ARRAY ZURÜCK!\n"
+                  "Nutze KEINE Platzhalter. Generiere 2 echte, sofort spielbare Fragen.\n"
+                  "Beispiel-Format:\n"
+                  "[\n"
+                  "  {\"question\": \"Was ist die wichtigste Regel beim Gegenpressing?\", \"options\": [\"A) Sofort nachsetzen\", \"B) Zurückziehen\", \"C) Abwarten\"], \"correct\": \"A) Sofort nachsetzen\", \"points\": 10}\n"
+                  "]")
         raw_text = get_gemini_json_text(prompt, api_key)
-        return json.loads(extract_json_array(raw_text))
-    except Exception as e: st.error(f"KI-Fehler: {e}"); return None
+        
+        # Abfangen: Wenn die KI absolut nichts antwortet
+        if not raw_text or not raw_text.strip():
+            raise ValueError("Die KI hat eine leere Antwort zurückgegeben.")
+            
+        extracted_text = extract_json_array(raw_text)
+        if not extracted_text or not extracted_text.strip():
+            raise ValueError("Es konnte kein JSON-Format in der Antwort gefunden werden.")
+            
+        parsed = json.loads(extracted_text)
+        
+        # Defensive Rückgabe, falls Gemini ein umschließendes Objekt gebaut hat
+        if isinstance(parsed, dict):
+            for k in ["items", "fragen", "questions"]:
+                if k in parsed: 
+                    parsed = parsed[k]
+                    break
+            else:
+                parsed = [parsed]
+        
+        if not isinstance(parsed, list):
+            parsed = [parsed]
+            
+        # Platzhalter rausfiltern und knallhart auf exakt 2 Fragen limitieren
+        echte_fragen = [q for q in parsed if isinstance(q, dict) and q.get("question") and "..." not in q.get("question", "")]
+        return echte_fragen[:2]
+    except Exception as e: 
+        st.error(f"KI-Fehler (Quiz): Bitte drücke den Button noch einmal. (Details: {e})")
+        return None
 
 def generiere_echte_ki_challenges(thema, api_key):
     if not HAS_GEMINI_LIB or not api_key: return None
     try:
-        prompt = f"Erstelle 2 Wochen-Challenges für U13-Fußballer zum Thema '{thema}' als JSON-Array mit title, points."
+        prompt = (f"Erstelle exakt 2 Wochen-Challenges für U13-Fußballer zum Thema '{thema}'.\n"
+                  "GIB AUSSCHLIESSLICH EIN SAUBERES JSON-ARRAY ZURÜCK!\n"
+                  "Nutze KEINE Platzhalter. Generiere 2 echte, sofort spielbare Challenges.\n"
+                  "Beispiel-Format:\n"
+                  "[\n"
+                  "  {\"title\": \"100x Jonglieren ohne Bodenkontakt\", \"points\": 25}\n"
+                  "]")
         raw_text = get_gemini_json_text(prompt, api_key)
-        return json.loads(extract_json_array(raw_text))
-    except Exception as e: st.error(f"KI-Fehler: {e}"); return None
+        
+        if not raw_text or not raw_text.strip():
+            raise ValueError("Die KI hat eine leere Antwort zurückgegeben.")
+            
+        extracted_text = extract_json_array(raw_text)
+        if not extracted_text or not extracted_text.strip():
+            raise ValueError("Es konnte kein JSON-Format in der Antwort gefunden werden.")
+            
+        parsed = json.loads(extracted_text)
+        
+        if isinstance(parsed, dict):
+            for k in ["items", "challenges"]:
+                if k in parsed: 
+                    parsed = parsed[k]
+                    break
+            else:
+                parsed = [parsed]
+                
+        if not isinstance(parsed, list):
+            parsed = [parsed]
+            
+        # Platzhalter rausfiltern und knallhart auf exakt 2 Challenges limitieren
+        echte_challenges = [c for c in parsed if isinstance(c, dict) and c.get("title") and "..." not in c.get("title", "")]
+        return echte_challenges[:2]
+    except Exception as e: 
+        st.error(f"KI-Fehler (Challenge): Bitte drücke den Button noch einmal. (Details: {e})")
+        return None
+
+# ==============================================================================
+# 3. GENERATOR FÜR TRAININGSPLAN (MIT DIAGNOSE & ANTI-KOPIER-SPERRE)
+# ==============================================================================
+def erstelle_ki_planer_prompt(anzahl_spieler, gewaehlte_phasen_bool, db_exercises, anzahl_tw="Egal"):
+    """Baut den KI-Prompt inklusive Spieler- und Torhüter-Vorgaben auf."""
+    if db_exercises:
+        # Wir nehmen bis zu 15 Übungen als Inspiration, da die bloße Existenz in der DB das "Gütesiegel" ist
+        ex_summary = [f"- [{e.get('name', 'Übung')}] (Phase: {e.get('phase', '-')}, Schwerpunkt: {e.get('schwerpunkt', '-')})" for e in db_exercises[-15:]]
+        db_kontext = "\n".join(ex_summary)
+    else:
+        db_kontext = "Noch keine Übungen in der Datenbank vorhanden."
+
+    if isinstance(gewaehlte_phasen_bool, bool):
+        gewaehlte_phasen_bool = [True, True, True, True, gewaehlte_phasen_bool]
+
+    anzufordernde_phasen = []
+    for idx, (titel, aktiv) in enumerate(zip(PHASEN_NAMEN, gewaehlte_phasen_bool), 1):
+        if aktiv:
+            anzufordernde_phasen.append(f'- Phase {idx}: "{titel}"')
+    
+    phasen_text = "\n".join(anzufordernde_phasen)
+
+    return f"""
+Erstelle hochqualitative, altersgerechte Fußball-Übungen für eine U13-Mannschaft (Goldenes Lernalter).
+RAHMENBEDINGUNGEN FÜR JEDE ÜBUNG:
+- Feldgröße: EXAKT EIN VIERTELFELD (ca. 35x50 Meter). Gebe bei den Übungen konkrete Meter-Maße an, die optimal in dieses Feld passen!
+- Spieleranzahl: {anzahl_spieler} Feldspieler. Alle Spieler müssen durchgängig aktiv sein (Vermeidung von langen Warteschlangen).
+- Verfügbare Torhüter (TW): {anzahl_tw}. (Passe die Tore/Zielformen strikt an die Anzahl der Torhüter an! Bei 0 TW nutze Minitore/Dribbellinien, bei 1 TW z. B. 1 Jugendtor + Minitore als Konterziele, bei 2 TW 2 Jugendtore).
+- Verfügbares Material: Maximal 2 Jugendtore, 4 Minitore, Hütchen und Stangen. Plane absolut nichts, was dieses Material übersteigt.
+
+### DEINE INSPIRATIONSQUELLE (DIE TRAINER-DATENBANK):
+{db_kontext}
+
+### REGELN FÜR DIE ÜBUNGS-GENERIERUNG:
+- Lass dich stark von den oben gelisteten Übungen aus der Datenbank inspirieren (Stil, Organisationsformen, Schwerpunkte).
+- Bringe aber gleichzeitig frische, neue Ideen und clevere Abwandlungen ein, damit das Training für die U13 spannend bleibt!
+- Kombiniere die bewährte Trainer-DNA mit neuen Impulsen. Erschaffe kreative Übungen, die so in der Datenbank noch nicht existieren.
+
+ERSTELLE NEUE ÜBUNGEN AUSSCHLIESSLICH FÜR FOLGENDE PHASEN:
+{phasen_text}
+
+AUSGABE FORMAT (GIB AUSSCHLIESSLICH EIN VALIDES JSON ARRAY FÜR DIE ANGEFORDERTEN PHASEN ZURÜCK!):
+[
+  {{
+    "phase_num": 1,
+    "phase_title": "Phase 1: Aufwärmen",
+    "exercise_name": "Name der Übung",
+    "spieler_bereich": "{anzahl_spieler - 2}-{anzahl_spieler + 2} Spieler",
+    "tw_info": "{anzahl_tw}",
+    "setup_text": "Aufbau...",
+    "flow_text": "Ablauf...",
+    "coaching_points": "Tipps..."
+  }}
+]
+"""
+
+def generiere_ki_einheit_5_phasen(anzahl_spieler, gewaehlte_phasen_bool, api_key, db_exercises=None, alter_plan=None, anzahl_tw="Egal"):
+    if isinstance(gewaehlte_phasen_bool, bool):
+        gewaehlte_phasen_bool = [True, True, True, True, gewaehlte_phasen_bool]
+
+    if not any(gewaehlte_phasen_bool):
+        st.warning("Bitte wähle mindestens eine Phase zum Generieren aus!")
+        return alter_plan or []
+
+    prompt = erstelle_ki_planer_prompt(anzahl_spieler, gewaehlte_phasen_bool, db_exercises or [], anzahl_tw)
+    raw_text = ""
+    try:
+        raw_text = get_gemini_json_text(prompt, api_key)
+        cleaned = raw_text.strip()
+        if cleaned.startswith("```"):
+            cleaned = re.sub(r"^```[a-zA-Z]*\n", "", cleaned)
+            cleaned = re.sub(r"\n```$", "", cleaned)
+            
+        neue_uebungen = json.loads(cleaned)
+        neue_map = {u.get("phase_num"): u for u in neue_uebungen if "phase_num" in u}
+        
+        finaler_plan = []
+        for idx in range(1, 6):
+            ist_aktiv = gewaehlte_phasen_bool[idx - 1]
+            
+            if ist_aktiv:
+                match = neue_map.get(idx)
+                if not match and neue_uebungen:
+                    match = neue_uebungen.pop(0)
+                    match["phase_num"] = idx
+                    match["phase_title"] = PHASEN_NAMEN[idx - 1]
+                
+                if match:
+                    finaler_plan.append(match)
+                else:
+                    finaler_plan.append({
+                        "phase_num": idx, "phase_title": PHASEN_NAMEN[idx - 1],
+                        "exercise_name": "Fehler bei Generierung", "setup_text": "-", "flow_text": "-", "coaching_points": "-"
+                    })
+            else:
+                if alter_plan and len(alter_plan) >= idx and alter_plan[idx - 1]:
+                    finaler_plan.append(alter_plan[idx - 1])
+                else:
+                    finaler_plan.append({
+                        "phase_num": idx, "phase_title": PHASEN_NAMEN[idx - 1],
+                        "exercise_name": "Nicht generiert (Abgewählt)", "setup_text": "-", "flow_text": "-", "coaching_points": "-"
+                    })
+                    
+        return finaler_plan
+
+    except json.decoder.JSONDecodeError:
+        st.error("JSON-Lesefehler! Die KI hat keinen sauberen Code geliefert.")
+        st.info(f"Die Roh-Antwort der KI war:\n{raw_text}")
+        return alter_plan
+    except Exception as e:
+        st.error(f"Fehler bei KI-Generierung: {e}")
+        return alter_plan
+
+# ==============================================================================
+# 2. SKIZZEN-GENERATOR FÜR EINE EINZELNE ÜBUNG (AUF KNOPFDRUCK)
+# ==============================================================================
+def generiere_ki_skizze(uebungs_text, api_key):
+    prompt = f"""
+    Erstelle EINE hochdetaillierte Taktik-Skizze für folgende Fußball-Übung auf einem Viertelfeld.
+    ÜBUNG: {uebungs_text}
+
+    REGELN FÜR DEN SVG-CODE (STRIKT EINHALTEN!):
+    - Valider HTML SVG-Code, viewBox='0 0 500 350'.
+    - Rasen (fill='#2e7d32'), Meter-Angaben, Spieler (gelb/rot), Hütchen (orange), Pfeile.
+    - GIB AUSSCHLIESSLICH EIN GÜLTIGES JSON-OBJEKT ZURÜCK!
+    - Nutze im SVG-Code AUSSCHLIESSLICH einfache Anführungszeichen (').
+
+    Format-Vorlage:
+    {{
+      "svg_code": "<svg viewBox='0 0 500 350'>...dein code...</svg>"
+    }}
+    """
+    raw_text = ""
+    try:
+        raw_text = get_gemini_json_text(prompt, api_key)
+        
+        if raw_text: 
+            raw_text = raw_text.replace("\\", "")
+            
+        # Plan A: Versuchen, das JSON sauber zu laden
+        try:
+            data = json.loads(extract_json_array(raw_text))
+            svg = ""
+            if isinstance(data, list) and len(data) > 0:
+                svg = data[0].get("svg_code", "")
+            elif isinstance(data, dict):
+                svg = data.get("svg_code", "")
+        except Exception:
+            svg = ""
+            
+        # Plan B (Der Libero): Wenn JSON kaputt ist, holen wir uns das SVG direkt aus dem Text
+        if not svg or "<svg" not in svg:
+            match = re.search(r"(<svg.*?</svg>)", raw_text, re.IGNORECASE | re.DOTALL)
+            if match:
+                svg = match.group(1)
+                
+        if not svg:
+            raise ValueError("Kein <svg> Tag im generierten Code gefunden.")
+            
+        return svg
+    except Exception as e:
+        st.error(f"Fehler bei Skizzen-Generierung: {e}")
+        with st.expander("🔍 Fehleranalyse: Was hat die KI geantwortet?"):
+            st.code(raw_text)
+        return None
+
+# --- FUNKTION: BESTEHENDE ÜBUNG MIT KI ANPASSEN ---
+def render_ki_anpassen_bereich(gemini_key):
+    st.divider()
+    st.markdown("### 🪄 Bestehende Übung mit KI anpassen")
+    st.caption("Wähle eine Übung aus deiner Sammlung und sage der KI, was geändert werden soll.")
+
+    db_exercises = st.session_state.data.get("exercises", [])
+    if not db_exercises:
+        return
+
+    options_map = {f"[{e.get('phase', 'Phase')}] {e.get('name', 'Übung')}": e for e in db_exercises}
+    selected_label = st.selectbox("Übung zum Bearbeiten auswählen:", list(options_map.keys()))
+    selected_ex = options_map[selected_label]
+
+    aenderungswunsch = st.text_input("Was möchtest du an dieser Übung ändern?", placeholder="z. B. 'Passe die Übung für 11 Spieler an'")
+
+    if st.button("🪄 Übung jetzt von KI umbauen lassen", type="primary"):
+        if not aenderungswunsch:
+            st.warning("Bitte gib zuerst einen Änderungswunsch ein!")
+        elif not gemini_key:
+            st.error("Kein Gemini API Key vorhanden!")
+        else:
+            with st.spinner("KI baut deine Übung um..."):
+                modify_prompt = f"""
+Du bist ein Fußballexperte. Passe die folgende Übung nach dem Wunsch des Trainers an.
+URSPRÜNGLICHE ÜBUNG:
+- Name: {selected_ex.get('name')}
+- Phase: {selected_ex.get('phase')}
+- Aufbau/Ablauf: {selected_ex.get('aufbau')}
+
+WUNSCH DES TRAINERS:
+"{aenderungswunsch}"
+
+Gib ausschließlich das Ergebnis im folgenden JSON-Format zurück:
+{{
+  "name": "Neuer/Angepasster Name",
+  "phase": "{selected_ex.get('phase')}",
+  "schwerpunkt": "{selected_ex.get('schwerpunkt')}",
+  "spieler": "Spieleranzahl",
+  "aufbau": "Neuer Aufbau, Ablauf und Coaching-Punkte..."
+}}
+"""
+                try:
+                    res_raw = get_gemini_json_text(modify_prompt, gemini_key)
+                    cleaned = res_raw.strip().replace("```json", "").replace("```", "")
+                    res_json = json.loads(cleaned)
+                    
+                    neue_id = max([x.get("id", 0) for x in st.session_state.data["exercises"]] + [0]) + 1
+                    res_json["id"] = neue_id
+                    res_json["grafik"] = selected_ex.get("grafik", "")
+                    
+                    st.session_state.data["exercises"].append(res_json)
+                    speichere_daten(st.session_state.data)
+                    st.success("🎉 Angepasste Übung als neue Variante in der Sammlung gespeichert!")
+                    st.rerun()
+                except Exception as err:
+                    st.error(f"Fehler bei der KI-Anpassung: {err}")
 
 # --- DATEN-MANAGEMENT ---
-def generiere_testdaten():
-    namen = ["Jannis", "Leo", "Tom", "Mats", "Finn", "Paul", "Luis", "Lasse", "Jonas", "Mika", "Emil", "Emilio", "Anton", "Noah", "Leon", "Elias", "Ben"]
-    spieler_liste = []
-    for i, name in enumerate(namen):
-        pos = [random.choice(POSITIONS)]
-        if random.random() > 0.4: pos.append(random.choice([p for p in POSITIONS if p != pos[0]]))
-        spieler_liste.append({
-            "id": i + 1, "name": name, "role": "Spieler", "number": str(random.randint(2, 99)), "positions": pos, 
-            "training": [], "matches": [], "pin": str(random.randint(1000, 9999)), "video_url": "", "video_notes": "",
-            "points": random.randint(10, 80), "completed_challenges": [], "solved_quizzes": [],
-            "base_pac": 75, "base_sho": 60, "base_pas": 65, "base_dri": 70, "base_def": 55, "base_phy": 65
-        })
-    spieler_liste.append({"id": 999, "name": "Pascal (Trainer)", "role": "Trainer", "number": "", "positions": [], "training": [], "matches": []})
-    
-    uebungs_liste = [
-        {"id": 1, "name": "Kognitives Einlaufen", "phase": "1. Aufwärmen", "schwerpunkt": "Passspiel", "spieler": "Alle", "aufbau": "Hütchenviereck. Einlaufen mit Richtungswechsel auf Signal.", "grafik": ""},
-        {"id": 2, "name": "Y-Passform", "phase": "2. Passspiel", "schwerpunkt": "Passspiel", "spieler": "10-12", "aufbau": "Passen im Y-Muster mit Nachlaufen. Fokus auf offene Stellung.", "grafik": ""},
-        {"id": 3, "name": "4 gegen 2 Rondo", "phase": "3. Rondo", "schwerpunkt": "Umschalten", "spieler": "6", "aufbau": "Klassisches Rondo im 10x10m Feld. Maximal 2 Kontakte.", "grafik": ""},
-        {"id": 4, "name": "Flügelspiel mit Torschuss", "phase": "4. Torschuss / Spielform", "schwerpunkt": "Torschuss", "spieler": "Alle", "aufbau": "Pass in die Gasse, Flanke und Torschuss im Zentrum.", "grafik": ""},
-        {"id": 5, "name": "Freies Spiel 8v8", "phase": "5. Abschlussspiel", "schwerpunkt": "Spielform", "spieler": "Alle", "aufbau": "Zwei Tore, freies Spiel im doppelten Strafraum.", "grafik": ""}
-    ]
-    
-    challenge_katalog = [
-        {"id": 1, "title": "⚽ 50x den Ball mit dem schwachen Fuß hochhalten!", "points": 25, "used_count": 1},
-        {"id": 2, "title": "🎯 5x hintereinander aus 16m die Torlatte treffen", "points": 30, "used_count": 0}
-    ]
-    
-    master_katalog = [
-        {"id": 1, "question": "Was machen wir sofort bei Ballverlust im Zentrum?", "options": ["A) Stehen bleiben und meckern", "B) Sofort nachsetzen & Umschalten auf Gegenpressing", "C) Langsam zurücklaufen"], "correct": "B) Sofort nachsetzen & Umschalten auf Gegenpressing", "points": 10, "used_count": 1},
-        {"id": 2, "question": "Wie verhalten sich die Außenbahnspieler (LM/RM) im eigenen Ballbesitz?", "options": ["A) Sie machen das Feld maximal breit", "B) Sie stellen sich alle in die Mitte", "C) Sie bleiben beim eigenen Torwart"], "correct": "A) Sie machen das Feld maximal breit", "points": 10, "used_count": 1}
-    ]
-    
+def generiere_leere_daten():
     return {
-        "players": spieler_liste, 
-        "exercises": uebungs_liste,
-        "challenge_pool": challenge_katalog,
-        "active_challenge_id": 1,
-        "quiz_pool": master_katalog,
-        "active_quiz_ids": [1, 2],
+        "players": [], 
+        "exercises": [], 
+        "challenge_pool": [],
+        "active_challenge_id": None,
+        "quiz_pool": [],
+        "active_quiz_ids": [],
         "principles": [],
         "standards": []
     }
-
+@st.cache_data(show_spinner=False)
 def lade_daten():
     data = None
     local_data = None
     
-    if os.path.exists(DATA_FILE):
-        try:
-            with open(DATA_FILE, "r", encoding="utf-8") as f:
-                local_data = json.load(f)
-        except Exception:
-            local_data = None
+    try:
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('SELECT data FROM store WHERE id="main"')
+        row = c.fetchone()
+        conn.close()
+        if row:
+            local_data = json.loads(row[0])
+    except Exception:
+        local_data = None
 
-    if API_URL:
-        try:
-            res = requests.get(API_URL, timeout=8)
-            if not res.text.strip().startswith("<!DOCTYPE") and "html" not in res.text.lower():
-                data = res.json()
-        except Exception: 
-            data = None
-
-    if data is None or not isinstance(data, dict) or not data.get("players"):
+    if data is None or not isinstance(data, dict):
         if local_data:
             data = local_data
         else:
-            data = generiere_testdaten()
+            data = generiere_leere_daten()
 
     if local_data and isinstance(local_data, dict):
         local_p = local_data.get("principles", [])
@@ -645,11 +1326,13 @@ def lade_daten():
         if "positions" not in pr or not isinstance(pr["positions"], list):
             pr["positions"] = ["Alle"]
 
-    if "challenge_pool" not in data or not data["challenge_pool"]: data["challenge_pool"] = generiere_testdaten()["challenge_pool"]
-    if "active_challenge_id" not in data: data["active_challenge_id"] = data["challenge_pool"][0]["id"]
+    if "challenge_pool" not in data or not data["challenge_pool"]: data["challenge_pool"] = []
+    if "active_challenge_id" not in data: 
+        data["active_challenge_id"] = data["challenge_pool"][0]["id"] if data["challenge_pool"] else None
         
-    if "quiz_pool" not in data or not data["quiz_pool"]: data["quiz_pool"] = generiere_testdaten()["quiz_pool"]
-    if "active_quiz_ids" not in data: data["active_quiz_ids"] = [q["id"] for q in data["quiz_pool"][:2]]
+    if "quiz_pool" not in data or not data["quiz_pool"]: data["quiz_pool"] = []
+    if "active_quiz_ids" not in data: 
+        data["active_quiz_ids"] = [q["id"] for q in data["quiz_pool"][:2]] if data["quiz_pool"] else []
 
     for p in data.get("players", []):
         if "role" not in p: p["role"] = "Spieler"
@@ -678,14 +1361,18 @@ def _cloud_sync_worker(payload_str, url):
 
 # --- PFEILSCHNELLE SPEICHERFUNKTION ---
 def speichere_daten(data):
+    lade_daten.clear() # Leert den Cache, damit beim nächsten Reload die frischen Daten geladen werden!
     st.session_state.data = data
     payload_str = json.dumps(data, ensure_ascii=False)
     
     try:
-        with open(DATA_FILE, "w", encoding="utf-8") as f:
-            f.write(payload_str)
+        conn = sqlite3.connect(DB_FILE)
+        c = conn.cursor()
+        c.execute('REPLACE INTO store (id, data) VALUES ("main", ?)', (payload_str,))
+        conn.commit()
+        conn.close()
     except Exception as e:
-        st.error(f"❌ Lokaler Speicherfehler: {e}")
+        st.error(f"❌ lokaler Speicherfehler (SQLite): {e}")
 
     if API_URL:
         threading.Thread(target=_cloud_sync_worker, args=(payload_str, API_URL), daemon=True).start()
@@ -998,7 +1685,6 @@ if selected_tab == "📜 Team-DNA":
             else:
                 for p in gefilderte_pos_p: render_prinzip_card(p)
 
-    # TRAINER-VERWALTUNG
     if is_trainer:
         st.divider()
         st.markdown("### 🛠️ Trainer-Verwaltung: Team-DNA bearbeiten")
@@ -1054,14 +1740,11 @@ if selected_tab == "📜 Team-DNA":
                 if edit_p:
                     with st.form("edit_principle_form"):
                         e_title = st.text_input("Titel anpassen:", value=edit_p.get("title", ""))
-                        
                         cur_cat_idx = CAT_OPTIONS.index(edit_p["category"]) if edit_p.get("category") in CAT_OPTIONS else 0
                         e_cat = st.selectbox("Kategorie anpassen:", CAT_OPTIONS, index=cur_cat_idx)
-                        
                         cur_pos = edit_p.get("positions", ["Alle"])
                         default_pos_selection = [x for x in cur_pos if x in POSITIONS]
                         e_pos = st.multiselect("Positionen anpassen (leer = für ALLE):", POSITIONS, default=default_pos_selection)
-                        
                         e_desc = st.text_area("Beschreibung anpassen:", value=edit_p.get("desc", ""), height=100)
                         
                         if st.form_submit_button("💾 Änderungen speichern", type="primary"):
@@ -1069,16 +1752,13 @@ if selected_tab == "📜 Team-DNA":
                             edit_p["category"] = e_cat
                             edit_p["positions"] = e_pos if e_pos else ["Alle"]
                             edit_p["desc"] = e_desc.strip()
-                            
                             speichere_daten(st.session_state.data)
                             st.toast("🎉 Prinzip aktualisiert!", icon="✏️")
                             st.rerun()
 
         with tr_p3:
             st.markdown("##### 🔃 Reihenfolge der Prinzipien verschieben")
-            st.caption("Nutze die Pfeiltasten, um Prinzipien weiter nach oben oder unten zu schieben:")
             prinzipien_pool = st.session_state.data.get("principles", [])
-            
             if not prinzipien_pool:
                 st.info("Keine Prinzipien vorhanden.")
             else:
@@ -1106,7 +1786,6 @@ if selected_tab == "📜 Team-DNA":
         with tr_p4:
             prinzipien_pool = st.session_state.data.get("principles", [])
             st.markdown("##### 🗑️ Einzelne oder ALLE Prinzipien löschen:")
-            
             if st.button("💥 Alle aktuellen Prinzipien auf einmal löschen (Leerer Neustart)", type="secondary"):
                 st.session_state.data["principles"] = []
                 speichere_daten(st.session_state.data)
@@ -1126,8 +1805,6 @@ if selected_tab == "📜 Team-DNA":
 
         with tr_p5:
             st.markdown("##### 💾 Datenbank-Sicherung (JSON Export & Import)")
-            st.caption("Lade deine aktuellen Daten als Datei herunter oder spiele ein Backup ein:")
-            
             json_str = json.dumps(st.session_state.data, indent=4, ensure_ascii=False)
             st.download_button(
                 label="📥 Aktuellen Datenstand herunterladen (.json)",
@@ -1136,7 +1813,6 @@ if selected_tab == "📜 Team-DNA":
                 mime="application/json",
                 type="primary"
             )
-            
             st.write("")
             uploaded_backup = st.file_uploader("📤 Backup-Datei hochladen (.json Wiederherstellung)", type=["json"])
             if uploaded_backup is not None:
@@ -1156,7 +1832,6 @@ if selected_tab == "📐 Standards":
     st.caption("Unsere einstudierten Ecken, Freistöße und Einwürfe auf einen Blick!")
     
     standards_list = st.session_state.data.get("standards", [])
-    
     filter_type = st.selectbox("Nach Typ filtern:", ["Alle Typen", "Ecke Links", "Ecke Rechts", "Freistoß", "Einwurf"])
     gefilderte_st = standards_list if filter_type == "Alle Typen" else [s for s in standards_list if s.get("type") == filter_type]
     
@@ -1179,7 +1854,6 @@ if selected_tab == "📐 Standards":
     if is_trainer:
         st.divider()
         st.markdown("### 🛠️ Trainer-Verwaltung: Standards zeichnen & verwalten")
-        
         st_tr1, st_tr2 = st.tabs(["✏️ Neue Variante zeichnen", "🗑️ Variante löschen"])
         
         with st_tr1:
@@ -1193,7 +1867,6 @@ if selected_tab == "📐 Standards":
             st.markdown("---")
             st.markdown("##### 🎨 Taktik-Spielfeld & Zeichenbrett")
             
-            # RENDERT DAS INTERAKTIVE HTML5 TAKTIKBOARD WITH EXAKTEM 16M-HALBKREIS & MAGNET-DRAG
             render_html5_taktikboard()
 
             st.write("")
@@ -1253,13 +1926,40 @@ if selected_tab == "🔍 Spieler-Profile":
         p = next(x for x in nur_spieler if x["name"] == selected_player_name)
         stats = berechne_statistiken(p)
         
-        pac = int(p.get("base_pac", 75))
-        sho = min(int(p.get("base_sho", 60)) + stats["⚽ Tore"], 99)
-        pas = min(int(p.get("base_pas", 65)) + stats["🅰️ Vorlagen"], 99)
-        dri = int(p.get("base_dri", 70))
-        df_val = int(p.get("base_def", 55))
-        att_bonus = int((stats["Beteiligung"] - 70) / 4) if stats["Beteiligung"] > 70 else -5
-        phy = min(max(int(p.get("base_phy", 65)) + att_bonus, 1), 99)
+        # --- DYNAMISCHE FUT-STATS BERECHNUNG (GAMIFICATION) ---
+        # 1. Basiswerte holen
+        base_pac = int(p.get("base_pac", 75))
+        base_sho = int(p.get("base_sho", 60))
+        base_pas = int(p.get("base_pas", 65))
+        base_dri = int(p.get("base_dri", 70))
+        base_def = int(p.get("base_def", 55))
+        base_phy = int(p.get("base_phy", 65))
+
+        # 2. Reale Leistungs-Boni berechnen
+        bonus_sho = stats["⚽ Tore"] * 2  # +2 pro Tor
+        bonus_pas = stats["🅰️ Vorlagen"] * 2  # +2 pro Vorlage
+        
+        # Trainingsbeteiligung: Über 60% gibt Pluspunkte, darunter Abzug
+        bonus_phy = int((stats["Beteiligung"] - 60) / 3) 
+        
+        # Fleiß bei Challenges macht schneller/fitter
+        bonus_pac = len(p.get("completed_challenges", [])) * 2 
+        
+        # Taktik-Quizze fördern Spielintelligenz & Technik
+        bonus_dri = len(p.get("solved_quizzes", [])) * 2 
+        
+        # Spielpraxis härtet defensiv ab
+        bonus_def = stats["🏃‍♂️ Spiele"] * 1 
+        
+        # 3. Finale Werte berechnen (Gedeckelt zwischen 1 und 99)
+        pac = min(max(base_pac + bonus_pac, 1), 99)
+        sho = min(max(base_sho + bonus_sho, 1), 99)
+        pas = min(max(base_pas + bonus_pas, 1), 99)
+        dri = min(max(base_dri + bonus_dri, 1), 99)
+        df_val = min(max(base_def + bonus_def, 1), 99)
+        phy = min(max(base_phy + bonus_phy, 1), 99)
+        
+        # 4. Gesamt-Rating (OVR) berechnen
         ovr = int((pac + sho + pas + dri + df_val + phy) / 6)
         pos_main = p["positions"][0] if p["positions"] else "ZM"
         
@@ -1392,7 +2092,6 @@ if selected_tab == "🎮 Challenge & Quiz":
     st.subheader("🎮 Alsterbrüder Skill-Challenges & Dynamisches Taktik-Quiz")
     c_sub1, c_sub2 = st.tabs(["⚡ Wochen-Challenge", "🧩 Taktik-Quiz"])
     
-    # --- SUBTAB 1: WOCHEN-CHALLENGES ---
     with c_sub1:
         challenge_katalog = st.session_state.data.get("challenge_pool", [])
         active_ch_id = st.session_state.data.get("active_challenge_id", 1)
@@ -1406,7 +2105,6 @@ if selected_tab == "🎮 Challenge & Quiz":
         else:
             st.info("Aktuell ist keine Challenge aktiv.")
 
-        # 👨‍🍳 TRAINER-PANEL FÜR CHALLENGES
         if is_trainer:
             st.markdown("---")
             st.markdown("#### 🛠️ Trainer-Verwaltung für Wochen-Challenges")
@@ -1458,10 +2156,14 @@ if selected_tab == "🎮 Challenge & Quiz":
                     st.markdown("---")
                     st.markdown("**Die KI schlägt vor:**")
                     for idx, ki_c in enumerate(st.session_state.fresh_gemini_challenges):
-                        st.info(f"**Aufgabe:** {ki_c['title']}\n\n• **Belohnung:** `{ki_c.get('points', 25)} EP`")
+                        # Defensive Aufstellung: Falls die KI einen anderen Key-Namen erfindet
+                        c_title = ki_c.get('title', ki_c.get('aufgabe', ki_c.get('name', 'Taktik-Challenge')))
+                        c_points = int(ki_c.get('points', ki_c.get('punkte', 25)))
+                        
+                        st.info(f"**Aufgabe:** {c_title}\n\n• **Belohnung:** `{c_points} EP`")
                         if st.button(f"➕ Challenge #{idx+1} dauerhaft in den Katalog übernehmen", key=f"add_gem_c_{idx}"):
                             neue_id = max([c["id"] for c in challenge_katalog] + [0]) + 1
-                            challenge_katalog.append({"id": neue_id, "title": ki_c["title"], "points": int(ki_c.get("points", 25)), "used_count": 0})
+                            challenge_katalog.append({"id": neue_id, "title": c_title, "points": c_points, "used_count": 0})
                             st.session_state.data["challenge_pool"] = challenge_katalog
                             speichere_daten(st.session_state.data)
                             st.success("Challenge in deinen Katalog gespeichert!")
@@ -1495,7 +2197,6 @@ if selected_tab == "🎮 Challenge & Quiz":
                         st.success("Challenge gelöscht!")
                         st.rerun()
 
-        # 🏃‍♂️ SPIELER-ABHAKEN
         if logged_in_player and aktive_challenge:
             st.divider()
             c_id_key = f"ch_id_{aktive_challenge['id']}"
@@ -1513,13 +2214,11 @@ if selected_tab == "🎮 Challenge & Quiz":
                     st.rerun()
         elif not logged_in_player: st.info("🔒 Logge dich in der Sidebar als Spieler ein, um die Challenge abzuhaken.")
 
-    # --- SUBTAB 2: TAKTIK-QUIZ ---
     with c_sub2:
         st.markdown("### 🧩 Taktik-Quiz & Punkte-Konto")
         master_katalog = st.session_state.data.get("quiz_pool", [])
         aktive_ids = st.session_state.data.get("active_quiz_ids", [])
         
-        # 🤖 TRAINER-PANEL FÜR QUIZ
         if is_trainer:
             st.markdown("#### 🛠️ Trainer-Verwaltung für Quiz & Fragenkatalog")
             tr_q_tab1, tr_q_tab2, tr_q_tab3, tr_q_tab4 = st.tabs([
@@ -1639,9 +2338,7 @@ if selected_tab == "🎮 Challenge & Quiz":
                             st.rerun()
             st.divider()
 
-        # 🏃‍♂️ SPIELER-ANSICHT (NUR AKTIVE WOCHEN-FRAGEN BEANTWORTEN)
         aktive_fragen = [q for q in master_katalog if q["id"] in aktive_ids]
-        
         if not aktive_fragen:
             st.info("Für diese Woche stehen noch keine aktiven Taktik-Fragen bereit. Schau bald wieder rein!")
         else:
@@ -1653,7 +2350,6 @@ if selected_tab == "🎮 Challenge & Quiz":
                     st.success("🏆 Du hast bereits ALLE aktiven Taktikfragen für diese Woche gelöst! Super gemacht!")
                 else:
                     st.markdown(f"**Hi {logged_in_player['name']}, hier sind deine offenen Wochen-Fragen:**")
-                    
                     user_answers = {}
                     for q in unsolved_questions:
                         st.markdown(f"##### ❓ {q['question']} (`+{q.get('points', 10)} EP`)")
@@ -1663,7 +2359,6 @@ if selected_tab == "🎮 Challenge & Quiz":
                     if st.button("🎯 Antworten auswerten & EP kassieren", type="primary"):
                         neue_punkte = 0
                         neu_geloest = []
-                        
                         for q in unsolved_questions:
                             ans = user_answers.get(q["id"])
                             if ans and ans.strip().lower() == q["correct"].strip().lower():
@@ -1674,7 +2369,6 @@ if selected_tab == "🎮 Challenge & Quiz":
                             logged_in_player["points"] = logged_in_player.get("points", 0) + neue_punkte
                             if "solved_quizzes" not in logged_in_player: logged_in_player["solved_quizzes"] = []
                             logged_in_player["solved_quizzes"].extend(neu_geloest)
-                            
                             speichere_daten(st.session_state.data)
                             st.balloons()
                             st.success(f"🎉 Richtig gewusst! Du hast `{neue_punkte} EP` erhalten! Dein neues Level liegt bei `{berechne_level(logged_in_player['points'])}`.")
@@ -1791,7 +2485,7 @@ if selected_tab == "⚽ Spiel loggen" and is_trainer:
     c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
     col_blau, col_gelb = st.columns(2)
     with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
-    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[3].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
+    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[3].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[4].text_input("Sp. 4", "0:0", key="g4")
     st.divider(); spiel_liste = []
     for p in nur_spieler:
         planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
@@ -1897,7 +2591,8 @@ if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
     if hochgeladene_datei is not None:
         try:
             df_import = pd.read_csv(hochgeladene_datei, sep=";") if hochgeladene_datei.name.endswith('.csv') else pd.read_excel(hochgeladene_datei)
-            st.dataframe(df_import.head(2)); spalten = df_import.columns.tolist()
+            st.dataframe(df_import.head(2))
+            spalten = df_import.columns.tolist()
             
             def f_sp(w):
                 for i, s in enumerate(spalten):
@@ -1907,27 +2602,79 @@ if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
                 return 0
                 
             c1, c2, c3, c4 = st.columns(4)
-            name_sp = c1.selectbox("Name", spalten, index=f_sp(["user_name", "spielername", "spieler", "name"]))
-            tail_sp = c2.selectbox("Beteiligung", spalten, index=f_sp(["user_participation", "zusage", "status"]))
-            dat_sp = c3.selectbox("Datum", spalten, index=f_sp(["event_date_start", "datum", "date"]))
-            typ_sp = c4.selectbox("Event-Typ", spalten, index=f_sp(["event_type", "typ", "art"]))
+            name_sp = c1.selectbox("Name Spalte", spalten, index=f_sp(["user_name", "spielername", "spieler", "name"]))
+            tail_sp = c2.selectbox("Beteiligung Spalte", spalten, index=f_sp(["user_participation", "zusage", "status"]))
+            dat_sp = c3.selectbox("Datum Spalte", spalten, index=f_sp(["event_date_start", "datum", "date"]))
+            typ_sp = c4.selectbox("Event-Typ Spalte", spalten, index=f_sp(["event_type", "typ", "art"]))
             
-            if st.button("Verarbeiten", type="primary"):
+            st.divider()
+            st.markdown("#### 🔄 Namens-Zuordnung überprüfen")
+            st.caption("Prüfe, ob die Namen aus der CSV-Datei korrekt mit deinen Spielern verknüpft sind.")
+            
+            # Alle einzigartigen Namen aus der CSV holen
+            csv_namen = df_import[name_sp].astype(str).str.strip().unique().tolist()
+            db_spieler_namen = sorted([p["name"] for p in st.session_state.data["players"]])
+            
+            mapping_daten = []
+            for csv_name in csv_namen:
+                # Versuch einer automatischen Zuordnung (Case-Insensitive)
+                match = next((db_n for db_n in db_spieler_namen if db_n.lower() == csv_name.lower()), "➕ Als neuen Spieler anlegen")
+                mapping_daten.append({"Name in CSV": csv_name, "Zuordnung in App": match})
+            
+            mapping_df = pd.DataFrame(mapping_daten)
+            
+            # Editor für die Zuordnung
+            editiertes_mapping = st.data_editor(
+                mapping_df,
+                hide_index=True,
+                disabled=["Name in CSV"],
+                column_config={
+                    "Zuordnung in App": st.column_config.SelectboxColumn(
+                        "Verknüpfen mit...",
+                        options=["➕ Als neuen Spieler anlegen", "❌ Ignorieren (Nicht importieren)"] + db_spieler_namen,
+                        required=True
+                    )
+                },
+                use_container_width=True
+            )
+            
+            # Erzeuge ein Dictionary für schnellen Lookup beim Import
+            mapping_dict = {row["Name in CSV"]: row["Zuordnung in App"] for _, row in editiertes_mapping.iterrows()}
+
+            if st.button("💾 Daten jetzt verarbeiten", type="primary"):
                 imp = 0
                 for index, row in df_import.iterrows():
-                    p_n, p_t, p_d, p_y = str(row[name_sp]).strip(), str(row[tail_sp]).strip().lower(), str(row[dat_sp]).strip().split(" ")[0], str(row[typ_sp]).strip()
+                    p_n_csv = str(row[name_sp]).strip()
+                    ziel_name = mapping_dict.get(p_n_csv, "❌ Ignorieren (Nicht importieren)")
+                    
+                    if ziel_name == "❌ Ignorieren (Nicht importieren)":
+                        continue
+                        
+                    p_t = str(row[tail_sp]).strip().lower()
+                    p_d = str(row[dat_sp]).strip().split(" ")[0]
+                    p_y = str(row[typ_sp]).strip()
+                    
                     erfolgs_woerter = ["status_confirmed", "ja", "zugesagt", "anwesend", "erschienen", "teilgenommen", "1", "true", "yes"]
                     anw = any(wort in p_t for wort in erfolgs_woerter)
                     
-                    sp = next((x for x in st.session_state.data["players"] if p_n.lower() == x["name"].lower()), None)
-                    if not sp: 
-                        sp = {"id": max([x["id"] for x in st.session_state.data["players"]]+[0])+1, "name": p_n, "role": "Spieler", "number": "", "positions": ["ZM"], "training": [], "matches": [], "pin": "", "video_url": "", "video_notes": "", "points": 0, "completed_challenges": [], "solved_quizzes": []}
-                        st.session_state.data["players"].append(sp)
+                    # Spieler finden oder neu anlegen
+                    if ziel_name == "➕ Als neuen Spieler anlegen":
+                        sp = next((x for x in st.session_state.data["players"] if p_n_csv.lower() == x["name"].lower()), None)
+                        if not sp: 
+                            sp = {"id": max([x["id"] for x in st.session_state.data["players"]]+[0])+1, "name": p_n_csv, "role": "Spieler", "number": "", "positions": ["ZM"], "training": [], "matches": [], "pin": "", "video_url": "", "video_notes": "", "points": 0, "completed_challenges": [], "solved_quizzes": []}
+                            st.session_state.data["players"].append(sp)
+                    else:
+                        sp = next(x for x in st.session_state.data["players"] if x["name"] == ziel_name)
+                        
+                    # Training eintragen
                     if "training" not in sp: sp["training"] = []
                     bestehender_eintrag = next((t for t in sp["training"] if t.get('date') == p_d and t.get('type') == p_y), None)
-                    if bestehender_eintrag: bestehender_eintrag["present"] = anw
-                    else: sp["training"].append({"date": p_d, "type": p_y, "present": anw})
+                    if bestehender_eintrag: 
+                        bestehender_eintrag["present"] = anw
+                    else: 
+                        sp["training"].append({"date": p_d, "type": p_y, "present": anw})
                     imp += 1
+                    
                 speichere_daten(st.session_state.data)
                 st.toast("🎉 Daten erfolgreich aktualisiert!", icon="🚀")
                 st.success(f"🎉 Erfolg! {imp} Einträge wurden verarbeitet.")
@@ -1940,72 +2687,356 @@ if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
         st.toast("🔥 Gelöscht!", icon="🗑️")
         st.success("Trainingszähler steht wieder auf 0%!")
 
-# --- TAB 8: TRAININGSPLANER + ÜBUNGSDATENBANK VERWALTUNG ---
+# # --- TAB 8: MAẞGESCHNEIDERTER KI 5-PHASEN TRAININGSPLANER ---
 if selected_tab == "📋 Trainingsplaner" and is_trainer:
     st.subheader("📋 Interaktiver Alsterbrüder 5-Phasen-Trainingsplaner")
-    planer_sub_tabs = ["⚽ Einheit generieren", "🗂️ Übungsdatenbank verwalten"]
-    p_tab_gen, p_tab_db = st.tabs(planer_sub_tabs)
+    st.caption("Massgeschneidert auf dein Viertelfeld (2 Jugendtore, 4 Minitore, Hütchen & Stangen)")
+
+
+    p_tab_gen, p_tab_db, p_tab_draw, p_tab_pdf = st.tabs([
+        "✨ KI-Einheit generieren",
+        "🗂️ Übungssammlung",
+        "🎨 Skizzen zeichnen",
+        "🧱 Einheiten-Baukasten & PDF-Export",
+        ])
+    
+    with p_tab_draw:
+        st.markdown("### 🎨 Taktik-Skizzen für deine Übungen zeichnen")
+        st.caption("Nutze das Board, um eigene Skizzen zu erstellen. Lade sie herunter, um sie mit deinem Team zu teilen oder bei Trainings einzusetzen.")
+        
+        render_html5_taktikboard()
+        
+        st.info("💡 **Pro-Tipp:** Wenn du fertig bist, klicke einfach auf **'📸 Speichern'**. Du kannst das Bild im Anschluss als PNG sichern, per WhatsApp an Co-Trainer senden oder in deine Übungsbeschreibungen textlich integrieren.")
+    with p_tab_pdf:
+        st.markdown("### 🧱 Stelle deine heutige Einheit zusammen")
+        st.caption("Wähle aus deiner Datenbank für jede der 5 Phasen die passende Übung aus.")
+
+        db_exercises = st.session_state.data.get("exercises", [])
+
+        if not db_exercises:
+            st.warning("Deine Datenbank ist noch leer. Speichere zuerst Übungen aus dem KI-Planer oder lege welche an!")
+        else:
+            col_meta1, col_meta2 = st.columns([2, 1])
+            with col_meta1:
+                plan_titel = st.text_input("Titel der Einheit:", value="U13 Viertelfeld-Einheit")
+            with col_meta2:
+                plan_datum = st.date_input("Datum des Trainings:")
+
+            st.divider()
+            st.markdown("##### 🔍 Übungssammlung für heutigen Kader filtern:")
+            b_f1, b_f2 = st.columns([1.5, 1])
+            with b_f1:
+                b_sp_bereich = st.slider("Spieleranzahl-Bereich:", min_value=4, max_value=24, value=(6, 20), key="baukasten_sp_slider")
+                b_min_sp, b_max_sp = b_sp_bereich
+            with b_f2:
+                b_filter_tw = st.selectbox("Verfügbare Torhüter (TW):", ["Egal", "Ohne TW (0)", "1 TW", "2 TW"], key="baukasten_tw_select")
+
+            st.divider()
+            gewaehlte_einheit = []
+
+            # Für jede der 5 Phasen ein gefiltertes Auswahlfeld erzeugen
+            for i, phase_name in enumerate(PHASEN_NAMEN, 1):
+                st.markdown(f"#### {phase_name}")
+                
+                target_phase = phase_name.lower()
+                passende = []
+                
+                for ex in db_exercises:
+                    ex_phase = str(ex.get("phase", ex.get("phase_title", ""))).strip().lower()
+                    
+                    if not ex_phase or ex_phase == "phase":
+                        continue
+                    
+                    if ex_phase in target_phase or target_phase in ex_phase:
+                        # 1. Spieleranzahl-Bereich prüfen
+                        sp_str = str(ex.get("spieler", ""))
+                        nums = [int(n) for n in re.findall(r'\d+', sp_str)]
+                        if nums:
+                            ex_min, ex_max = min(nums), max(nums)
+                            if ex_max < b_min_sp or ex_min > b_max_sp:
+                                continue
+
+                        # 2. Torhüter (TW) Filter prüfen
+                        tw_val = str(ex.get("tw", "")).strip()
+                        full_text = f"{ex.get('name', '')} {ex.get('aufbau', '')} {ex.get('schwerpunkt', '')} {sp_str}".lower()
+                        
+                        if b_filter_tw == "Ohne TW (0)":
+                            if "0 tw" in tw_val or "ohne" in tw_val.lower():
+                                pass
+                            elif "2 tw" in full_text or "1 tw" in full_text or "torwart" in full_text or "torhüter" in full_text:
+                                if "ohne tw" not in full_text and "kein tw" not in full_text:
+                                    continue
+                        elif b_filter_tw == "1 TW":
+                            if "1 tw" in tw_val:
+                                pass
+                            elif "2 tw" in full_text or "2 torhüter" in full_text or "ohne tw" in full_text:
+                                if "1 tw" not in full_text and "1 torwart" not in full_text and "1 torhüter" not in full_text:
+                                    continue
+                        elif b_filter_tw == "2 TW":
+                            if "2 tw" in tw_val:
+                                pass
+                            elif "2 tw" not in full_text and "2 torhüter" in full_text and "2 torwarte" not in full_text and "zwei tw" not in full_text:
+                                continue
+
+                        passende.append(ex)
+
+                if passende:
+                    options_map = {
+                        f"{ex.get('name', 'Ohne Name')} ({ex.get('spieler', 'Kader')})": ex 
+                        for ex in passende
+                    }
+                    
+                    selected_key = st.selectbox(
+                        f"Übung für {phase_name} wählen:", 
+                        options=list(options_map.keys()), 
+                        key=f"baukasten_p_{i}"
+                    )
+                    
+                    if selected_key:
+                        gewaehlte_einheit.append(options_map[selected_key])
+                else:
+                    st.warning(f"⚠️ Keine passende Übung für '{phase_name}' mit diesen Kriterien ({b_min_sp}–{b_max_sp} Spieler, {b_filter_tw}) in der Datenbank.")
+
+            st.divider()
+
+            # Download-Button erscheint, sobald alle 5 Phasen besetzt sind
+            if len(gewaehlte_einheit) == 5:
+                pdf_html = generiere_druck_html(plan_titel, plan_datum.strftime("%d.%m.%Y"), gewaehlte_einheit)
+                
+                st.download_button(
+                    label="📄 Druckfertigen Trainingsplan herunterladen (HTML/PDF)",
+                    data=pdf_html,
+                    file_name=f"Trainingsplan_{plan_datum.strftime('%Y-%m-%d')}.html",
+                    mime="text/html",
+                    type="primary"
+                )
+                
+                st.info("💡 **Tipp:** Wenn du die heruntergeladene Datei öffnest, klickst du einfach auf 'Als PDF speichern'. So erhältst du ein perfektes DIN A4 Dokument inkl. aller Taktikskizzen!")
+            elif db_exercises:
+                st.caption("ℹ️ Sobald für alle 5 Phasen jeweils eine Übung gewählt ist, wird der PDF-Download freigeschaltet.")
     with p_tab_gen:
-        st.markdown("#### 🤖 Nächste Trainingseinheit zusammenwürfeln")
-        alle_schwerpunkte = sorted(list(set(u.get("schwerpunkt", "Allgemein") for u in st.session_state.data["exercises"])))
-        if not alle_schwerpunkte: alle_schwerpunkte = ["Passspiel", "Torschuss", "Umschalten", "Defensive"]
-        gewaehlter_schwerpunkt = st.selectbox("Fokus/Schwerpunkt für das heutige Training:", alle_schwerpunkte)
-        if st.button("🎲 Einheit auswürfeln", type="primary"):
-            generierter_plan = {}
-            for phase in TRAINING_PHASES:
-                pool = [u for u in st.session_state.data["exercises"] if u["phase"] == phase]
-                schwerpunkt_pool = [u for u in pool if u.get("schwerpunkt", "").lower() == gewaehlter_schwerpunkt.lower()]
-                finaler_pool = schwerpunkt_pool if schwerpunkt_pool else pool
-                if finaler_pool: generierter_plan[phase] = random.choice(finaler_pool)
-            st.session_state.aktueller_trainingsplan = generierter_plan
-        if "aktueller_trainingsplan" in st.session_state:
-            st.success(f"🔥 Fertig! Schwerpunkt: **{gewaehlter_schwerpunkt}**")
-            for phase in TRAINING_PHASES:
-                if phase in st.session_state.aktueller_trainingsplan:
-                    u = st.session_state.aktueller_trainingsplan[phase]
-                    with st.expander(f"➔ {phase}: {u['name']} ({u.get('spieler', 'Alle')} Spieler)", expanded=True):
-                        col_text, col_gfx = st.columns([1, 1])
-                        with col_text:
-                            st.markdown(f"**🎯 Schwerpunkt:** {u.get('schwerpunkt', '-')}\n\n**🛠️ Aufbau & Regeln:**\n{u['aufbau']}")
-                        with col_gfx:
-                            gfx_url = u.get("grafik", "").strip()
-                            if gfx_url:
-                                if "[docs.google.com/presentation](https://docs.google.com/presentation)" in gfx_url: st.components.v1.html(f'<iframe src="{gfx_url}" frameborder="0" width="100%" height="220" allowfullscreen="true"></iframe>', height=230)
-                                elif "drive.google.com" in gfx_url or gfx_url.lower().endswith(".pdf"): st.components.v1.html(f'<iframe src="{gfx_url}" width="100%" height="280" style="border:none;" allowfullscreen="true"></iframe>', height=290)
-                                else: st.image(gfx_url, caption="Übungsgrafik", use_container_width=True)
-                            else: st.info("Keine Grafik hinterlegt.")
-                else: st.warning(f"Keine Übung für Phase '{phase}' gefunden.")
+        c_conf1, c_col2 = st.columns([1, 1])
+        with c_conf1:
+            anzahl_sp = st.number_input("Anzahl anwesender Spieler:", min_value=6, max_value=24, value=len(nur_spieler) if nur_spieler else 14)
+        with c_col2:
+            anzahl_tw = st.selectbox("Verfügbare Torhüter (TW):", ["Egal", "Ohne TW (0)", "1 TW", "2 TW"], index=0, key="gen_tw_select")
+
+        st.markdown("##### ⚙️ Welche Phasen sollen neu generiert werden?")
+        ch_col1, ch_col2, ch_col3, ch_col4, ch_col5 = st.columns(5)
+        p1_active = ch_col1.checkbox("Phase 1\n(Aufwärmen)", value=True)
+        p2_active = ch_col2.checkbox("Phase 2\n(Passspiel)", value=True)
+        p3_active = ch_col3.checkbox("Phase 3\n(Rondo)", value=True)
+        p4_active = ch_col4.checkbox("Phase 4\n(Duelle)", value=True)
+        p5_active = ch_col5.checkbox("Phase 5\n(Abschluss)", value=True)
+
+        gewaehlte_phasen = [p1_active, p2_active, p3_active, p4_active, p5_active]
+
+        if st.button("✨ Neue KI-Einheit auf dem Viertelfeld generieren", type="primary"):
+            if not gemini_key:
+                st.error("⚠️ Kein Gemini API Key hinterlegt.")
+            else:
+                with st.spinner("🤖 Gemini berechnet deine gewählten Phasen..."):
+                    db_ex = st.session_state.data.get("exercises", [])
+                    alter_plan = st.session_state.get("aktueller_ki_plan", None)
+                    
+                    neue_einheit = generiere_ki_einheit_5_phasen(
+                        anzahl_sp, gewaehlte_phasen, gemini_key, db_ex, alter_plan, anzahl_tw
+                    )
+                    
+                    if neue_einheit:
+                        st.session_state.aktueller_ki_plan = neue_einheit
+                        st.toast("🎉 Übungen wurden aktualisiert!", icon="⚽")
+
+        # ANZEIGE DES KI-GENERIEREN PLANS
+        if "aktueller_ki_plan" in st.session_state and st.session_state.aktueller_ki_plan:
+            st.divider()
+            st.markdown(f"### 📋 Dein aktueller Trainingsplan ({anzahl_sp} Spieler)")
+            
+            for idx, ph in enumerate(st.session_state.aktueller_ki_plan):
+                with st.container(border=True):
+                    col_t, col_svg = st.columns([2, 1])
+                    with col_t:
+                        st.markdown(f"#### Phase {ph.get('phase_num', idx+1)}: {ph.get('exercise_name', 'Übung')}")
+                        st.caption(f"📌 **Kategorie:** {ph.get('phase_title', PHASEN_NAMEN[idx])}")
+                        st.caption(f"👥 **Geeignet für:** {ph.get('spieler_bereich', f'{anzahl_sp} Spieler')}")
+                        st.markdown(f"**🛠️ Aufbau & Material:**\n{ph.get('setup_text', '-')}")
+                        st.markdown(f"**🏃‍♂️ Ablauf & Regeln:**\n{ph.get('flow_text', '-')}")
+                        st.markdown(f"**🗣️ Coaching-Tipps:** {ph.get('coaching_points', '-')}")
+                        
+                        st.write("")
+                        # SPEICHERKNOPF MIT DYNAMISCHEM SPIELER-BEREICH
+                        if st.button(f"💾 In Übungs-Datenbank speichern", key=f"save_ex_{idx}_{ph.get('exercise_name')}"):
+                            neue_id = max([x.get("id", 0) for x in st.session_state.data["exercises"]] + [0]) + 1
+                            full_aufbau = f"🛠️ AUFBAU:\n{ph.get('setup_text', '')}\n\n🏃‍♂️ ABLAUF:\n{ph.get('flow_text', '')}\n\n🗣️ COACHING:\n{ph.get('coaching_points', '')}"
+                            
+                            p_num = ph.get('phase_num', idx+1)
+                            p_title_str = PHASEN_NAMEN[p_num - 1] if 1 <= p_num <= 5 else PHASEN_NAMEN[idx]
+
+                            st.session_state.data["exercises"].append({
+                                "id": neue_id,
+                                "name": ph.get('exercise_name', 'KI Übung'),
+                                "phase": p_title_str,
+                                "schwerpunkt": "Viertelfeld / KI-Generiert",
+                                "spieler": ph.get('spieler_bereich', f"{anzahl_sp} Spieler"),
+                                "aufbau": full_aufbau,
+                                "grafik": ph.get("svg_code", "")
+                            })
+                            speichere_daten(st.session_state.data)
+                            st.toast(f"🎉 '{ph.get('exercise_name')}' ({ph.get('spieler_bereich', '')}) gespeichert!", icon="💾")
+
+                    with col_svg:
+                        svg = ph.get('svg_code', '').strip()
+                        if svg and '<svg' in svg:
+                            # Skizze ist da -> Anzeigen
+                            render_svg_responsive(svg, height=320)
+                        else:
+                            # Noch keine Skizze da -> Button anzeigen
+                            st.info("Keine Skizze vorhanden.")
+                            if st.button(f"🎨 Skizze mit KI generieren", key=f"draw_svg_{idx}"):
+                                with st.spinner("🤖 Zeichne Taktik-Skizze..."):
+                                    uebungs_infos = f"{ph.get('exercise_name')} | Aufbau: {ph.get('setup_text')} | Ablauf: {ph.get('flow_text')}"
+                                    neue_skizze = generiere_ki_skizze(uebungs_infos, gemini_key)
+                                    if neue_skizze:
+                                        st.session_state.aktueller_ki_plan[idx]["svg_code"] = neue_skizze
+                                        st.rerun()
+
+            # CHAT-EINGABE FÜR ANPASSUNGEN
+            st.divider()
+            st.markdown("### 💬 Passt was nicht? Diskutiere mit Gemini:")
+            user_chat_msg = st.chat_input("Änderungswunsch eingeben (z. B. 'Mach Phase 3 zu einem 4v2 Rondo')...")
+            if user_chat_msg:
+                with st.spinner("🤖 Gemini passt deinen Trainingsplan an..."):
+                    angepasst = anpassung_ki_einheit_chat(st.session_state.aktueller_ki_plan, user_chat_msg, gemini_key)
+                    if angepasst:
+                        st.session_state.aktueller_ki_plan = angepasst
+                        st.success("Plan erfolgreich überarbeitet!")
+                        st.rerun()
+
+    # 2. ÜBUNGSSAMMLUNG (ANZEIGE & DETAIL-BEARBEITUNG)
     with p_tab_db:
-        st.markdown("#### 🗂️ Eure Übungssammlung")
-        with st.expander("➕ Neue Übung zur Liste hinzufügen", expanded=False):
+        st.markdown("#### 🗂️ Gespeicherte Übungssammlung")
+        
+        with st.expander("➕ Eigene Übung manuell anlegen", expanded=False):
             with st.form("neue_uebung_form"):
                 u_name = st.text_input("Name der Übung:")
-                u_phase = st.selectbox("Trainings-Phase:", TRAINING_PHASES)
-                u_focus = st.text_input("Schwerpunkt (Tag):")
-                u_players = st.text_input("Spieleranzahl / Organisation:")
+                u_phase = st.selectbox("Trainings-Phase:", PHASEN_NAMEN)
+                u_focus = st.text_input("Schwerpunkt / Tag:")
+                u_players = st.text_input("Spieleranzahl:")
                 u_setup = st.text_area("Aufbau, Ablauf und Coaching-Punkte:")
-                u_gfx = st.text_input("Google Slides Embed-Link / Google Drive PDF-Vorschau:")
-                if st.form_submit_button("💾 Übung dauerhaft speichern", type="primary"):
-                    if not u_name.strip(): st.error("Der Name der Übung fehlt!")
+                u_gfx = st.text_area("SVG Skizze / Grafik-Code (Optional):")
+                if st.form_submit_button("💾 Übung speichern", type="primary"):
+                    if not u_name.strip():
+                        st.error("Name der Übung fehlt!")
                     else:
-                        neue_id = max([x["id"] for x in st.session_state.data["exercises"]] + [0]) + 1
-                        st.session_state.data["exercises"].append({"id": neue_id, "name": u_name.strip(), "phase": u_phase, "schwerpunkt": u_focus.strip(), "spieler": u_players.strip(), "aufbau": u_setup.strip(), "grafik": u_gfx.strip()})
+                        neue_id = max([x.get("id", 0) for x in st.session_state.data["exercises"]] + [0]) + 1
+                        st.session_state.data["exercises"].append({
+                            "id": neue_id, "name": u_name.strip(), "phase": u_phase, 
+                            "schwerpunkt": u_focus.strip(), "spieler": u_players.strip(), 
+                            "aufbau": u_setup.strip(), "grafik": u_gfx.strip()
+                        })
                         speichere_daten(st.session_state.data)
                         st.success("Übung hinzugefügt!")
                         st.rerun()
-        if st.session_state.data["exercises"]:
-            ex_df = pd.DataFrame(st.session_state.data["exercises"])
-            editiere_db = st.data_editor(ex_df, disabled=["id"], hide_index=True, use_container_width=True, num_rows="dynamic")
-            if st.button("💾 Tabellen-Änderungen in der Datenbank sichern"):
-                neue_liste = []
-                for index, row in editiere_db.iterrows():
-                    if str(row["name"]).strip(): neue_liste.append({"id": int(row["id"]) if pd.notna(row["id"]) else random.randint(1000,9999), "name": str(row["name"]), "phase": str(row["phase"]), "schwerpunkt": str(row["schwerpunkt"]), "spieler": str(row["spieler"]), "aufbau": str(row["aufbau"]), "grafik": str(row["grafik"])})
-                st.session_state.data["exercises"] = neue_liste
-                speichere_daten(st.session_state.data)
-                st.success("Übungsdatenbank aktualisiert!")
-                st.rerun()
-        else: st.info("Übungsdatenbank leer.")
 
+        st.divider()
+        if not st.session_state.data["exercises"]:
+            st.info("Deine Übungssammlung ist aktuell noch leer. Speichere Übungen aus dem KI-Planer oder lege manuell welche an.")
+        else:
+           # --- DYNAMISCHER 3-FACH FILTER (PHASE, SPIELER-BEREICH & TORHÜTER) ---
+            f_col1, f_col2, f_col3 = st.columns([1.2, 1.8, 1])
+            
+            with f_col1:
+                filter_phase = st.selectbox("Nach Phase filtern:", ["Alle 5 Phasen"] + PHASEN_NAMEN)
+                
+            with f_col2:
+                filter_sp_bereich = st.slider("Spieleranzahl-Bereich:", min_value=4, max_value=24, value=(6, 20))
+                min_sp, max_sp = filter_sp_bereich
+
+            with f_col3:
+                filter_tw = st.selectbox("Verfügbare Torhüter (TW):", ["Egal", "Ohne TW (0)", "1 TW", "2 TW"], key="db_tw_select")
+
+            for ex in st.session_state.data["exercises"]:
+                # 1. Phasen-Filter
+                if filter_phase != "Alle 5 Phasen" and ex.get("phase") != filter_phase:
+                    continue
+
+                # 2. Dynamischer Spieleranzahl-Bereich Filter (prüft Überschneidungen)
+                sp_str = str(ex.get("spieler", ""))
+                nums = [int(n) for n in re.findall(r'\d+', sp_str)]
+                if nums:
+                    ex_min, ex_max = min(nums), max(nums)
+                    if ex_max < min_sp or ex_min > max_sp:
+                        continue
+
+                # 3. Torhüter (TW) Filter (mit smarter Text-Erkennung)
+                tw_val = str(ex.get("tw", "")).strip()
+                full_text = f"{ex.get('name', '')} {ex.get('aufbau', '')} {ex.get('schwerpunkt', '')} {sp_str}".lower()
+                
+                if filter_tw == "Ohne TW (0)":
+                    if "0 tw" in tw_val or "ohne" in tw_val.lower():
+                        pass
+                    elif "2 tw" in full_text or "1 tw" in full_text or "torwart" in full_text or "torhüter" in full_text:
+                        if "ohne tw" not in full_text and "kein tw" not in full_text:
+                            continue
+                elif filter_tw == "1 TW":
+                    if "1 tw" in tw_val:
+                        pass
+                    elif "2 tw" in full_text or "2 torhüter" in full_text or "ohne tw" in full_text:
+                        if "1 tw" not in full_text and "1 torwart" not in full_text and "1 torhüter" not in full_text:
+                            continue
+                elif filter_tw == "2 TW":
+                    if "2 tw" in tw_val:
+                        pass
+                    elif "2 tw" not in full_text and "2 torhüter" in full_text and "2 torwarte" not in full_text and "zwei tw" not in full_text:
+                        continue
+                    
+                # 3. NACHTRÄGLICHES BEARBEITEN & GRAFIK-VORSCHAU
+                with st.expander(f"✏️ [{ex.get('phase', 'Phase')}] {ex.get('name', 'Übung')}", expanded=False):
+                    
+                    # --- RESPONSIVE SKIZZEN-VORSCHAU IN DER DATENBANK ---
+                    svg_code = ex.get('grafik', '').strip()
+                    if svg_code and '<svg' in svg_code:
+                      st.markdown('**🎨 Taktik-Skizze mit Maßangaben:**')
+                      render_svg_responsive(svg_code, height=340)
+                    elif svg_code and svg_code.startswith('['):
+                      st.info("💡 Diese Übung enthält einen Taktik-Code aus deinem Board! Kopiere ihn einfach hier raus und lade ihn im Taktikboard (Tab: Skizzen zeichnen) über den '📂 Import'-Button, um die Übung zu bearbeiten.")
+                    # -------------------------------------------
+
+                    with st.form(key=f"edit_ex_form_{ex['id']}"):
+                        e_name = st.text_input("Übungsname:", value=ex.get("name", ""))
+                        
+                        cur_p = ex.get("phase", PHASEN_NAMEN[0])
+                        p_idx = PHASEN_NAMEN.index(cur_p) if cur_p in PHASEN_NAMEN else 0
+                        e_phase = st.selectbox("Phase zuordnen:", PHASEN_NAMEN, index=p_idx)
+                        
+                        e_focus = st.text_input("Schwerpunkt:", value=ex.get("schwerpunkt", ""))
+                        e_players = st.text_input("Spieleranzahl:", value=ex.get("spieler", ""))
+                        e_aufbau = st.text_area("Aufbau, Ablauf & Regeln:", value=ex.get("aufbau", ""), height=150)
+                        e_grafik = st.text_area("Taktik-Code (Füge hier SVG oder Board-Export ein):", value=ex.get("grafik", ""), height=80)
+                        
+                        btn_c1, btn_c2 = st.columns([1, 1])
+                        save_btn = btn_c1.form_submit_button("💾 Änderungen für diese Übung speichern", type="primary")
+                        
+                        if save_btn:
+                            ex["name"] = e_name.strip()
+                            ex["phase"] = e_phase
+                            if "rating" in ex: del ex["rating"] # Entfernt alte Sterne-Wertungen aus der DB
+                            ex["schwerpunkt"] = e_focus.strip()
+                            ex["spieler"] = e_players.strip()
+                            ex["aufbau"] = e_aufbau.strip()
+                            ex["grafik"] = e_grafik.strip()
+                            speichere_daten(st.session_state.data)
+                            st.toast("🎉 Übung erfolgreich aktualisiert!", icon="✏️")
+                            st.rerun()
+
+                    # Löschen Button (außerhalb der Form)
+                    if st.button("🗑️ Übung aus Datenbank löschen", key=f"del_ex_{ex['id']}"):
+                        st.session_state.data["exercises"] = [x for x in st.session_state.data["exercises"] if x["id"] != ex["id"]]
+                        speichere_daten(st.session_state.data)
+                        st.toast("🗑️ Übung gelöscht!")
+                        st.rerun()
+                        # GANZ UNTEN IN DER ÜBUNGSSAMMLUNG RENDERER AUFRUFEN:
+        render_ki_anpassen_bereich(gemini_key)
 # --- TAB 9: LIGA-ZENTRALE ---
 if selected_tab == "🏆 Liga-Tabelle":
     st.subheader("🏆 Liga-Zentrale (U12 Bezirksliga 36)")
