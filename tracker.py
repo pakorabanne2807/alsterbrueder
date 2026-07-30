@@ -193,7 +193,6 @@ def berechne_level(punkte):
     else: return "🟢 Jugend-Rookie"
 
 # --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
-# --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
 def render_html5_taktikboard():
     html_code = """
     <!DOCTYPE html>
@@ -203,8 +202,8 @@ def render_html5_taktikboard():
         body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; margin: 0; padding: 0; background: #f8fafc; }
         .toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 8px; align-items: center; background: #ffffff; padding: 8px 12px; border-radius: 8px; border: 1px solid #cbd5e1; }
         .toolbar-label { font-size: 13px; font-weight: bold; color: #334155; margin-right: 4px; }
-        .drag-item { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; cursor: grab; font-size: 18px; user-select: none; transition: transform 0.1s; }
-        .drag-item:active { cursor: grabbing; transform: scale(1.1); }
+        .drag-item { display: inline-flex; align-items: center; justify-content: center; width: 34px; height: 34px; background: #f1f5f9; border: 1px solid #cbd5e1; border-radius: 6px; cursor: grab; font-size: 18px; user-select: none; transition: all 0.15s ease; touch-action: manipulation; }
+        .drag-item:active, .drag-item.selected-item { cursor: grabbing; transform: scale(1.15); background: #3b82f6; border-color: #1d4ed8; box-shadow: 0 0 8px rgba(59, 130, 246, 0.6); }
         .tool-btn { padding: 6px 12px; border-radius: 6px; border: 1px solid #94a3b8; font-size: 13px; cursor: pointer; background: #fff; color: #334155; }
         .tool-btn.active { background: #e2e8f0; border-color: #475569; font-weight: bold; box-shadow: inset 0 2px 4px rgba(0,0,0,0.1); }
         .btn-action { border: none; font-weight: bold; color: white; padding: 6px 10px; border-radius: 6px; cursor: pointer; font-size: 13px; }
@@ -223,15 +222,15 @@ def render_html5_taktikboard():
 
     <div class="toolbar">
         <div class="toolbar-label">Symbole:</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#facc15')" title="Spieler Gelb">🟡</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#ef4444')" title="Spieler Rot">🔴</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#000000')" title="Torwart">⚫</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'cone', '#ea580c')" title="Hütchen">🔺</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'pole', '#facc15')" title="Stange">📍</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal', '#ffffff')" title="Minitor (H)">🥅</div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal_v', '#ffffff')" title="Minitor (V)">🥅<sup style="font-size:10px">V</sup></div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal', '#ffffff')" title="Großes Tor (H)">🥅<sub style="font-size:10px">LH</sub></div>
-        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal_v', '#ffffff')" title="Großes Tor (V)">🥅<sub style="font-size:10px">LV</sub></div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#facc15')" onclick="selectItemMobile(this, 'dot', '#facc15')" title="Spieler Gelb">🟡</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#ef4444')" onclick="selectItemMobile(this, 'dot', '#ef4444')" title="Spieler Rot">🔴</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#000000')" onclick="selectItemMobile(this, 'dot', '#000000')" title="Torwart">⚫</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'cone', '#ea580c')" onclick="selectItemMobile(this, 'utensil', 'cone', '#ea580c')" title="Hütchen">🔺</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'pole', '#facc15')" onclick="selectItemMobile(this, 'utensil', 'pole', '#facc15')" title="Stange">📍</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'minigoal', '#ffffff')" title="Minitor (H)">🥅</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal_v', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'minigoal_v', '#ffffff')" title="Minitor (V)">🥅<sup style="font-size:10px">V</sup></div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'largegoal', '#ffffff')" title="Großes Tor (H)">🥅<sub style="font-size:10px">LH</sub></div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'largegoal_v', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'largegoal_v', '#ffffff')" title="Großes Tor (V)">🥅<sub style="font-size:10px">LV</sub></div>
         <button class="tool-btn" style="margin-left:auto;" onclick="addTextShape()">🔤 Text</button>
     </div>
 
@@ -250,6 +249,7 @@ def render_html5_taktikboard():
         <div class="divider"></div>
         <button class="tool-btn" onclick="exportShapes()" title="Bauplan für später speichern">💾 Export</button>
         <button class="tool-btn" onclick="importShapes()" title="Bauplan wieder laden">📂 Import</button>
+        <button class="tool-btn" style="background:#0284c7; color:white; font-weight:bold;" onclick="sendToExercise()" title="Skizze direkt an eine Übung anhängen">⚽ An Übung senden</button>
         
         <div class="divider"></div>
         <select id="templateSelect" style="margin-left:auto; padding:5px; border-radius:6px; border:1px solid #94a3b8;" onchange="resetPitch()">
@@ -303,6 +303,23 @@ def render_html5_taktikboard():
         let isLineDrawing = false;
         let lineStart = {x: 0, y: 0};
         let activeTool = 'move';
+        
+        // Touch/Mobile Platzierungs-Variable
+        let selectedMobileItem = null;
+
+        function selectItemMobile(element, type, subtypeOrColor, overrideColor = null) {
+            document.querySelectorAll('.drag-item').forEach(el => el.classList.remove('selected-item'));
+            
+            if (selectedMobileItem && selectedMobileItem.element === element) {
+                selectedMobileItem = null;
+                updateStatus();
+                return;
+            }
+            
+            element.classList.add('selected-item');
+            selectedMobileItem = { element: element, type: type, subtypeOrColor: subtypeOrColor, overrideColor: overrideColor };
+            statusBar.innerText = "👉 Tippe jetzt auf das Spielfeld, um das Symbol zu platzieren!";
+        }
 
         function setTool(t) {
             activeTool = t;
@@ -353,6 +370,16 @@ def render_html5_taktikboard():
                     alert("Ungültiger Code! Fehler beim Einlesen.");
                 }
             }
+        }
+
+        function sendToExercise() {
+            if (shapes.length === 0) {
+                alert("Das Feld ist leer! Zeichne zuerst eine Skizze.");
+                return;
+            }
+            const dataStr = JSON.stringify(shapes);
+            prompt("📋 Kopiere diesen Taktik-Code (Strg+C) und füge ihn unten im Zuordnungs-Formular ein:", dataStr);
+            statusBar.innerText = "⚽ Taktik-Code in die Zwischenablage kopiert!";
         }
 
         function onDragStart(e, type, subtypeOrColor, overrideColor = null) {
@@ -706,6 +733,26 @@ def render_html5_taktikboard():
         drawCanvas.addEventListener('mousedown', (e) => {
             const pos = getPos(e); 
             
+            // Mobile-Platzierung ausführen, falls ein Symbol ausgewählt ist
+            if (selectedMobileItem) {
+                saveSnapshot();
+                let newShape;
+                if (selectedMobileItem.type === 'dot') {
+                    newShape = { type: 'dot', x: pos.x, y: pos.y, color: selectedMobileItem.subtypeOrColor };
+                } else if (selectedMobileItem.type === 'utensil') {
+                    newShape = { type: 'utensil', uType: selectedMobileItem.subtypeOrColor, x: pos.x, y: pos.y, color: selectedMobileItem.overrideColor || '#ffffff' };
+                }
+                if (newShape) {
+                    shapes.push(newShape);
+                    selectedShapes = [newShape];
+                }
+                selectedMobileItem.element.classList.remove('selected-item');
+                selectedMobileItem = null;
+                setTool('move');
+                redrawAll();
+                return;
+            }
+
             const hit = getHitHandle(pos);
             if (activeTool === 'move') {
                 if (hit) {
@@ -2704,11 +2751,60 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
     
     with p_tab_draw:
         st.markdown("### 🎨 Taktik-Skizzen für deine Übungen zeichnen")
-        st.caption("Nutze das Board, um eigene Skizzen zu erstellen. Lade sie herunter, um sie mit deinem Team zu teilen oder bei Trainings einzusetzen.")
+        st.caption("Nutze das Board, um eigene Skizzen zu erstellen. Klicke im Board auf '⚽ An Übung senden', kopiere den Code und verknüpfe ihn direkt mit einer Übung.")
         
         render_html5_taktikboard()
         
-        st.info("💡 **Pro-Tipp:** Wenn du fertig bist, klicke einfach auf **'📸 Speichern'**. Du kannst das Bild im Anschluss als PNG sichern, per WhatsApp an Co-Trainer senden oder in deine Übungsbeschreibungen textlich integrieren.")
+        st.divider()
+        st.markdown("#### 🔗 Skizze aus Board einer Übung zuweisen")
+        
+        db_exercises = st.session_state.data.get("exercises", [])
+        
+        with st.form("assign_sketch_form"):
+            code_input = st.text_area("📋 Taktik-Code hier einfügen (aus '⚽ An Übung senden'):", height=70)
+            
+            ex_options = {"➕ Als NEUE Übung anlegen": -1}
+            for ex in db_exercises:
+                ex_options[f"[{ex.get('phase', 'Phase')}] {ex.get('name', 'Übung')}"] = ex["id"]
+                
+            selected_ex_label = st.selectbox("Ziel-Übung auswählen:", list(ex_options.keys()))
+            selected_ex_id = ex_options[selected_ex_label]
+            
+            # Zusatzfelder, falls die Skizze als neue Übung angelegt werden soll
+            new_ex_name = st.text_input("Name der neuen Übung (nur wichtig bei 'Als NEUE Übung anlegen'):")
+            new_ex_phase = st.selectbox("Phase (nur bei neuer Übung):", PHASEN_NAMEN)
+            
+            if st.form_submit_button("💾 Skizze jetzt verknüpfen & speichern", type="primary"):
+                if not code_input.strip():
+                    st.error("Bitte füge zuerst den Taktik-Code aus dem Board ein!")
+                elif selected_ex_id == -1 and not new_ex_name.strip():
+                    st.error("Bitte gib einen Namen für die neue Übung ein!")
+                else:
+                    if selected_ex_id == -1:
+                        # Neue Übung in der DB anlegen
+                        neue_id = max([x.get("id", 0) for x in db_exercises] + [0]) + 1
+                        neue_uebung = {
+                            "id": neue_id,
+                            "name": new_ex_name.strip(),
+                            "phase": new_ex_phase,
+                            "schwerpunkt": "Eigene Skizze",
+                            "spieler": "Kader",
+                            "tw": "Egal",
+                            "aufbau": "Manuell erstellt mit Skizze aus Taktikboard.",
+                            "grafik": code_input.strip()
+                        }
+                        st.session_state.data["exercises"].append(neue_uebung)
+                        st.toast(f"🎉 Neue Übung '{new_ex_name}' mit Skizze gespeichert!", icon="⚽")
+                    else:
+                        # Bestehende Übung in der DB aktualisieren
+                        target_ex = next((x for x in db_exercises if x["id"] == selected_ex_id), None)
+                        if target_ex:
+                            target_ex["grafik"] = code_input.strip()
+                            st.toast(f"🎉 Skizze erfolgreich an '{target_ex['name']}' angehängt!", icon="🔗")
+                            
+                    speichere_daten(st.session_state.data)
+                    st.rerun()
+
     with p_tab_pdf:
         st.markdown("### 🧱 Stelle deine heutige Einheit zusammen")
         st.caption("Wähle aus deiner Datenbank für jede der 5 Phasen die passende Übung aus.")
@@ -2918,26 +3014,38 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
     with p_tab_db:
         st.markdown("#### 🗂️ Gespeicherte Übungssammlung")
         
-        with st.expander("➕ Eigene Übung manuell anlegen", expanded=False):
+        with st.expander("➕ Eigene Übung manuell anlegen (Offline-Modus)", expanded=False):
             with st.form("neue_uebung_form"):
                 u_name = st.text_input("Name der Übung:")
-                u_phase = st.selectbox("Trainings-Phase:", PHASEN_NAMEN)
-                u_focus = st.text_input("Schwerpunkt / Tag:")
-                u_players = st.text_input("Spieleranzahl:")
-                u_setup = st.text_area("Aufbau, Ablauf und Coaching-Punkte:")
-                u_gfx = st.text_area("SVG Skizze / Grafik-Code (Optional):")
-                if st.form_submit_button("💾 Übung speichern", type="primary"):
+                c_u1, c_u2 = st.columns([1, 1])
+                with c_u1:
+                    u_phase = st.selectbox("Trainings-Phase:", PHASEN_NAMEN)
+                    u_players = st.text_input("Spieleranzahl (z. B. '10-14 Spieler'):")
+                with c_u2:
+                    u_focus = st.text_input("Schwerpunkt / Tag (z. B. 'Gegenpressing'):")
+                    u_tw = st.selectbox("Verfügbare Torhüter (TW):", ["Egal", "Ohne TW (0)", "1 TW", "2 TW"])
+                    
+                u_setup = st.text_area("Aufbau, Ablauf und Coaching-Punkte:", height=120)
+                u_gfx = st.text_area("Taktik-Code / SVG Skizze (Optional, aus Taktikboard kopierbar):", height=80)
+                
+                if st.form_submit_button("💾 Übung lokal speichern", type="primary"):
                     if not u_name.strip():
-                        st.error("Name der Übung fehlt!")
+                        st.error("Bitte gib der Übung einen Namen!")
                     else:
                         neue_id = max([x.get("id", 0) for x in st.session_state.data["exercises"]] + [0]) + 1
-                        st.session_state.data["exercises"].append({
-                            "id": neue_id, "name": u_name.strip(), "phase": u_phase, 
-                            "schwerpunkt": u_focus.strip(), "spieler": u_players.strip(), 
-                            "aufbau": u_setup.strip(), "grafik": u_gfx.strip()
-                        })
+                        neue_uebung = {
+                            "id": neue_id, 
+                            "name": u_name.strip(), 
+                            "phase": u_phase, 
+                            "schwerpunkt": u_focus.strip(), 
+                            "spieler": u_players.strip(), 
+                            "tw": u_tw,
+                            "aufbau": u_setup.strip(), 
+                            "grafik": u_gfx.strip()
+                        }
+                        st.session_state.data["exercises"].append(neue_uebung)
                         speichere_daten(st.session_state.data)
-                        st.success("Übung hinzugefügt!")
+                        st.toast("🎉 Übung erfolgreich offline gespeichert!", icon="💾")
                         st.rerun()
 
         st.divider()
@@ -3013,6 +3121,12 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                         
                         e_focus = st.text_input("Schwerpunkt:", value=ex.get("schwerpunkt", ""))
                         e_players = st.text_input("Spieleranzahl:", value=ex.get("spieler", ""))
+                        
+                        cur_tw = ex.get("tw", "Egal")
+                        tw_options = ["Egal", "Ohne TW (0)", "1 TW", "2 TW"]
+                        tw_idx = tw_options.index(cur_tw) if cur_tw in tw_options else 0
+                        e_tw = st.selectbox("Torhüter-Anforderung:", tw_options, index=tw_idx)
+                        
                         e_aufbau = st.text_area("Aufbau, Ablauf & Regeln:", value=ex.get("aufbau", ""), height=150)
                         e_grafik = st.text_area("Taktik-Code (Füge hier SVG oder Board-Export ein):", value=ex.get("grafik", ""), height=80)
                         
@@ -3022,9 +3136,10 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                         if save_btn:
                             ex["name"] = e_name.strip()
                             ex["phase"] = e_phase
-                            if "rating" in ex: del ex["rating"] # Entfernt alte Sterne-Wertungen aus der DB
+                            if "rating" in ex: del ex["rating"]
                             ex["schwerpunkt"] = e_focus.strip()
                             ex["spieler"] = e_players.strip()
+                            ex["tw"] = e_tw
                             ex["aufbau"] = e_aufbau.strip()
                             ex["grafik"] = e_grafik.strip()
                             speichere_daten(st.session_state.data)
