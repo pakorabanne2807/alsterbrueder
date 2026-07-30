@@ -686,6 +686,16 @@ def render_html5_taktikboard():
         function clearDrawings() { curveStep = 0; shapes = []; history = []; selectedShapes = []; drawCtx.clearRect(0, 0, 550, 380); updateStatus(); }
         function getPos(e) { const rect = drawCanvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
 
+        // Hilfsfunktion für Touch-Koordinaten (Mobile)
+        function getTouchPos(e) {
+            const rect = drawCanvas.getBoundingClientRect();
+            const touch = e.touches[0];
+            return {
+                x: touch.clientX - rect.left,
+                y: touch.clientY - rect.top
+            };
+        }
+
         function getHitHandle(pos) {
             for (let i = shapes.length - 1; i >= 0; i--) {
                 let s = shapes[i];
@@ -892,6 +902,81 @@ def render_html5_taktikboard():
                 redrawAll(); 
             }
         });
+
+        // --- TOUCH EVENTS FÜR MOBILE VERSCHIEBEN ---
+        
+        drawCanvas.addEventListener('touchstart', (e) => {
+            if (activeTool !== 'move') return; // Nur im Markieren-Modus verschieben
+            
+            // Verhindert Scrollen des Browsers beim Ziehen
+            if (e.target === drawCanvas) {
+                // e.preventDefault(); // Kann bei Streamlit zu Problemen führen, wir nutzen touch-action CSS
+            }
+            
+            const pos = getTouchPos(e);
+            const hit = getHitHandle(pos);
+            
+            if (hit) {
+                saveSnapshot();
+                isDragging = true;
+                dragTarget = hit;
+                dragTarget.lastX = pos.x;
+                dragTarget.lastY = pos.y;
+                
+                if (!selectedShapes.includes(hit.shape)) {
+                    selectedShapes = [hit.shape];
+                }
+                redrawAll();
+            }
+        }, { passive: true });
+
+        drawCanvas.addEventListener('touchmove', (e) => {
+            if (!isDragging || !dragTarget || e.touches.length === 0) return;
+            
+            const pos = getTouchPos(e);
+            const dx = pos.x - dragTarget.lastX;
+            const dy = pos.y - dragTarget.lastY;
+
+            if (selectedShapes.length > 1 && selectedShapes.includes(dragTarget.shape)) {
+                selectedShapes.forEach(s => {
+                    if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') { 
+                        s.x += dx; s.y += dy; 
+                    } else if (s.type === 'line' || s.type === 'dashed') { 
+                        s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; 
+                    } else if (s.type === 'curve') { 
+                        s.x0 += dx; s.y0 += dy; s.cx += dx; s.cy += dy; s.x2 += dx; s.y2 += dy; 
+                    }
+                });
+            } else {
+                const s = dragTarget.shape; 
+                const h = dragTarget.handle;
+                
+                if (s.type === 'dot' || s.type === 'text' || s.type === 'utensil') { 
+                    s.x = pos.x; s.y = pos.y; 
+                }
+                else if (s.type === 'line' || s.type === 'dashed') { 
+                    if (h === 'start') { s.x1 = pos.x; s.y1 = pos.y; } 
+                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; } 
+                    else if (h === 'center') { s.x1 += dx; s.y1 += dy; s.x2 += dx; s.y2 += dy; }
+                }
+                else if (s.type === 'curve') { 
+                    if (h === 'start') { s.x0 = pos.x; s.y0 = pos.y; } 
+                    else if (h === 'control') { s.cx = pos.x; s.cy = pos.y; } 
+                    else if (h === 'end') { s.x2 = pos.x; s.y2 = pos.y; } 
+                    else if (h === 'center') { s.x0 += dx; s.y0 += dy; s.cx += dx; s.cy += dy; s.x2 += dx; s.y2 += dy; }
+                }
+            }
+            
+            dragTarget.lastX = pos.x;
+            dragTarget.lastY = pos.y;
+            redrawAll();
+            
+        }, { passive: true });
+
+        drawCanvas.addEventListener('touchend', (e) => {
+            isDragging = false;
+            dragTarget = null;
+        }, { passive: true });
 
         drawPitch(); updateStatus();
     </script>
