@@ -194,7 +194,7 @@ def berechne_level(punkte):
 
 # --- NATIVE HTML5 TAKTIKBOARD KOMPONENTE (PERFEKTE GEOMETRIE & MAGNETE) ---
 def render_html5_taktikboard():
-    html_code = """
+    html_code = r"""
     <!DOCTYPE html>
     <html>
     <head>
@@ -698,7 +698,7 @@ def render_html5_taktikboard():
         }
 
         function getHitHandle(pos) {
-            # Auf Touch-Geräten nutzen wir deutlich größere Radien (30px / 35px) zum "Anfassen"
+            // Auf Touch-Geräten nutzen wir deutlich größere Radien (30px / 35px) zum "Anfassen"
             const rDot = 30;
             const rHandle = 35; 
             
@@ -1023,7 +1023,7 @@ def render_html5_taktikboard():
     </body>
     </html>
     """
-    st.components.v1.html(html_code, height=540)
+    st.components.v1.html(html_code, height=580)
 
 # --- INTELLIGENTER JSON-SLICER ---
 def extract_json_array(text):
