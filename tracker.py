@@ -2392,16 +2392,32 @@ if selected_tab == "🎮 Challenge & Quiz":
 
             with ch_tr_4:
                 st.markdown("##### 🗂️ Gesamter Challenge-Katalog:")
-                for c in challenge_katalog:
-                    status = f"⚠️ {c.get('used_count',0)}x genutzt" if c.get('used_count',0) > 0 else "🟢 Neu"
-                    is_active = " (🟢 AKTUEL ACTIVE)" if c["id"] == active_ch_id else ""
-                    c_col1, c_col2 = st.columns([4, 1])
-                    c_col1.write(f"**[{c['id']}] {c['title']}** `{status}`{is_active} (`{c.get('points',25)} EP`)")
-                    if c_col2.button("🗑️ Löschen", key=f"del_c_{c['id']}"):
-                        st.session_state.data["challenge_pool"] = [x for x in challenge_katalog if x["id"] != c["id"]]
-                        speichere_daten(st.session_state.data)
-                        st.success("Challenge gelöscht!")
-                        st.rerun()
+                if not challenge_katalog:
+                    st.write("Dein Katalog ist leer.")
+                else:
+                    for c in challenge_katalog:
+                        status = f"⚠️ {c.get('used_count',0)}x genutzt" if c.get('used_count',0) > 0 else "🟢 Neu"
+                        is_active = " (🟢 AKTUELL AKTIV)" if c["id"] == active_ch_id else ""
+                        
+                        with st.expander(f"✏️ [{c['id']}] {c['title']} {is_active} ({c.get('points',25)} EP)"):
+                            with st.form(f"edit_c_form_{c['id']}"):
+                                e_title = st.text_input("Aufgabe anpassen:", value=c['title'])
+                                e_pts = st.number_input("Punkte (EP):", min_value=5, max_value=100, value=int(c.get('points', 25)))
+                                
+                                if st.form_submit_button("💾 Änderungen speichern", type="primary"):
+                                    c['title'] = e_title.strip()
+                                    c['points'] = int(e_pts)
+                                    speichere_daten(st.session_state.data)
+                                    st.toast("🎉 Challenge erfolgreich aktualisiert!", icon="✏️")
+                                    st.rerun()
+                                    
+                            if st.button("🗑️ Challenge aus Katalog löschen", key=f"del_c_{c['id']}"):
+                                st.session_state.data["challenge_pool"] = [x for x in challenge_katalog if x["id"] != c["id"]]
+                                if st.session_state.data.get("active_challenge_id") == c["id"]:
+                                    st.session_state.data["active_challenge_id"] = None
+                                speichere_daten(st.session_state.data)
+                                st.success("Challenge gelöscht!")
+                                st.rerun()
 
         if logged_in_player and aktive_challenge:
             st.divider()
@@ -2529,19 +2545,55 @@ if selected_tab == "🎮 Challenge & Quiz":
 
             with tr_q_tab4:
                 st.markdown("##### 🗂️ Alle Fragen im Gesamtkatalog:")
-                if not master_katalog: st.write("Katalog ist leer.")
+                if not master_katalog: 
+                    st.write("Katalog ist leer.")
                 else:
                     for q in master_katalog:
                         status = f"⚠️ {q.get('used_count',0)}x genutzt" if q.get('used_count',0) > 0 else "🟢 Neu"
                         is_active_str = " (🟢 DIESE WOCHE AKTIV)" if q["id"] in aktive_ids else ""
-                        col_q1, col_q2 = st.columns([4, 1])
-                        col_q1.write(f"**[{q['id']}] {q['question']}** `{status}`{is_active_str} (`{q.get('points', 10)} EP`) - *Lösung:* {q['correct']}")
-                        if col_q2.button("🗑️ Löschen", key=f"del_q_{q['id']}"):
-                            st.session_state.data["quiz_pool"] = [x for x in master_katalog if x["id"] != q["id"]]
-                            st.session_state.data["active_quiz_ids"] = [x for x in aktive_ids if x != q["id"]]
-                            speichere_daten(st.session_state.data)
-                            st.success("Frage gelöscht!")
-                            st.rerun()
+                        
+                        with st.expander(f"✏️ [{q['id']}] {q['question']} {is_active_str}"):
+                            with st.form(f"edit_q_form_{q['id']}"):
+                                eq_q = st.text_input("Taktikfrage:", value=q.get("question", ""))
+                                
+                                opts = q.get("options", ["A) ", "B) ", "C) "])
+                                while len(opts) < 3: opts.append("")
+                                
+                                val_a = opts[0][3:].strip() if opts[0].startswith("A)") else opts[0]
+                                val_b = opts[1][3:].strip() if opts[1].startswith("B)") else opts[1]
+                                val_c = opts[2][3:].strip() if opts[2].startswith("C)") else opts[2]
+                                
+                                eq_a = st.text_input("Antwort A:", value=val_a)
+                                eq_b = st.text_input("Antwort B:", value=val_b)
+                                eq_c = st.text_input("Antwort C:", value=val_c)
+                                
+                                cur_corr = q.get("correct", "")
+                                corr_idx = 0
+                                if cur_corr.startswith("B)"): corr_idx = 1
+                                elif cur_corr.startswith("C)"): corr_idx = 2
+                                
+                                eq_correct = st.selectbox("Richtige Option:", ["Option A", "Option B", "Option C"], index=corr_idx)
+                                eq_pts = st.number_input("Punkte:", min_value=5, max_value=50, value=int(q.get("points", 10)))
+                                
+                                if st.form_submit_button("💾 Änderungen speichern", type="primary"):
+                                    q["question"] = eq_q.strip()
+                                    q["options"] = [f"A) {eq_a.strip()}", f"B) {eq_b.strip()}", f"C) {eq_c.strip()}"]
+                                    
+                                    if eq_correct == "Option A": q["correct"] = f"A) {eq_a.strip()}"
+                                    elif eq_correct == "Option B": q["correct"] = f"B) {eq_b.strip()}"
+                                    else: q["correct"] = f"C) {eq_c.strip()}"
+                                    
+                                    q["points"] = int(eq_pts)
+                                    speichere_daten(st.session_state.data)
+                                    st.toast("🎉 Frage erfolgreich aktualisiert!", icon="✏️")
+                                    st.rerun()
+                                    
+                            if st.button("🗑️ Frage aus Katalog löschen", key=f"del_q_{q['id']}"):
+                                st.session_state.data["quiz_pool"] = [x for x in master_katalog if x["id"] != q["id"]]
+                                st.session_state.data["active_quiz_ids"] = [x for x in aktive_ids if x != q["id"]]
+                                speichere_daten(st.session_state.data)
+                                st.success("Frage gelöscht!")
+                                st.rerun()
             st.divider()
 
         aktive_fragen = [q for q in master_katalog if q["id"] in aktive_ids]
