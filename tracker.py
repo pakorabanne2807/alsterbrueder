@@ -1507,8 +1507,9 @@ def lade_daten():
             pr["positions"] = ["Alle"]
 
     if "challenge_pool" not in data or not data["challenge_pool"]: data["challenge_pool"] = []
-    if "active_challenge_id" not in data: 
-        data["active_challenge_id"] = data["challenge_pool"][0]["id"] if data["challenge_pool"] else None
+    if "active_challenge_ids" not in data: 
+        alt_id = data.get("active_challenge_id")
+        data["active_challenge_ids"] = [alt_id] if alt_id is not None else []
         
     if "quiz_pool" not in data or not data["quiz_pool"]: data["quiz_pool"] = []
     if "active_quiz_ids" not in data: 
@@ -2300,16 +2301,22 @@ if selected_tab == "🎮 Challenge & Quiz":
     
     with c_sub1:
         challenge_katalog = st.session_state.data.get("challenge_pool", [])
-        active_ch_id = st.session_state.data.get("active_challenge_id", 1)
-        aktive_challenge = next((c for c in challenge_katalog if c["id"] == active_ch_id), None)
-        if not aktive_challenge and challenge_katalog:
-            aktive_challenge = challenge_katalog[0]
-            
-        if aktive_challenge:
-            st.markdown(f"### 🎯 Aktuelle Wochen-Aufgabe: {aktive_challenge['title']}")
-            st.markdown(f"**Belohnung:** `+{aktive_challenge.get('points', 25)} EP` für deinen Alsterbrüder-Rang!")
+        
+        # Daten-Migration zur Laufzeit abfangen
+        if "active_challenge_ids" not in st.session_state.data:
+            alt_id = st.session_state.data.get("active_challenge_id")
+            active_ch_ids = [alt_id] if alt_id is not None else []
         else:
-            st.info("Aktuell ist keine Challenge aktiv.")
+            active_ch_ids = st.session_state.data.get("active_challenge_ids", [])
+            
+        aktive_challenges = [c for c in challenge_katalog if c["id"] in active_ch_ids]
+        
+        if aktive_challenges:
+            st.markdown("### 🎯 Aktuelle Wochen-Aufgaben")
+            for c in aktive_challenges:
+                st.info(f"**{c['title']}**\n\nBelohnung: `+{c.get('points', 25)} EP`")
+        else:
+            st.info("Aktuell ist keine Challenge aktiv. Pause für diese Woche!")
 
         if is_trainer:
             st.markdown("---")
@@ -2322,7 +2329,7 @@ if selected_tab == "🎮 Challenge & Quiz":
             ])
             
             with ch_tr_1:
-                st.markdown("##### 🗓️ Aktive Wochen-Challenge festlegen")
+                st.markdown("##### 🗓️ Aktive Wochen-Challenges festlegen")
                 if not challenge_katalog: st.warning("Katalog ist leer.")
                 else:
                     options_dict = {}
@@ -2331,16 +2338,24 @@ if selected_tab == "🎮 Challenge & Quiz":
                         label = f"[{c['id']}] {c['title']} ({c.get('points', 25)} EP) | {status}"
                         options_dict[label] = c["id"]
                     
-                    cur_label = next((k for k, v in options_dict.items() if v == active_ch_id), list(options_dict.keys())[0])
-                    sel_ch_label = st.selectbox("Wähle eine Challenge aus deinem Katalog:", list(options_dict.keys()), index=list(options_dict.keys()).index(cur_label))
+                    default_selected = [k for k, v in options_dict.items() if v in active_ch_ids]
+                    gewaehlte_ch_labels = st.multiselect(
+                        "Wähle aktive Challenges aus deinem Katalog (leer lassen für keine):", 
+                        options=list(options_dict.keys()),
+                        default=default_selected
+                    )
                     
-                    if st.button("💾 Ausgewählte Challenge für die Woche freischalten", type="primary"):
-                        chosen_id = options_dict[sel_ch_label]
-                        st.session_state.data["active_challenge_id"] = chosen_id
-                        chosen_c = next((c for c in challenge_katalog if c["id"] == chosen_id), None)
-                        if chosen_c: chosen_c["used_count"] = chosen_c.get("used_count", 0) + 1
+                    if st.button("💾 Ausgewählte Challenges für die Woche freischalten", type="primary"):
+                        neue_aktive_ids = [options_dict[lbl] for lbl in gewaehlte_ch_labels]
+                        st.session_state.data["active_challenge_ids"] = neue_aktive_ids
+                        
+                        for n_id in neue_aktive_ids:
+                            c_obj = next((x for x in challenge_katalog if x["id"] == n_id), None)
+                            if c_obj and n_id not in active_ch_ids: # Zähler nur erhöhen wenn frisch aktiviert
+                                c_obj["used_count"] = c_obj.get("used_count", 0) + 1
+                                
                         speichere_daten(st.session_state.data)
-                        st.success("Wochen-Challenge ist live geschaltet!")
+                        st.success(f"Erfolgreich {len(neue_aktive_ids)} Challenges für die Woche aktiviert!")
                         st.rerun()
 
             with ch_tr_2:
@@ -2397,7 +2412,7 @@ if selected_tab == "🎮 Challenge & Quiz":
                 else:
                     for c in challenge_katalog:
                         status = f"⚠️ {c.get('used_count',0)}x genutzt" if c.get('used_count',0) > 0 else "🟢 Neu"
-                        is_active = " (🟢 AKTUELL AKTIV)" if c["id"] == active_ch_id else ""
+                        is_active = " (🟢 AKTUELL AKTIV)" if c["id"] in active_ch_ids else ""
                         
                         with st.expander(f"✏️ [{c['id']}] {c['title']} {is_active} ({c.get('points',25)} EP)"):
                             with st.form(f"edit_c_form_{c['id']}"):
@@ -2413,28 +2428,38 @@ if selected_tab == "🎮 Challenge & Quiz":
                                     
                             if st.button("🗑️ Challenge aus Katalog löschen", key=f"del_c_{c['id']}"):
                                 st.session_state.data["challenge_pool"] = [x for x in challenge_katalog if x["id"] != c["id"]]
-                                if st.session_state.data.get("active_challenge_id") == c["id"]:
-                                    st.session_state.data["active_challenge_id"] = None
+                                st.session_state.data["active_challenge_ids"] = [x for x in active_ch_ids if x != c["id"]]
                                 speichere_daten(st.session_state.data)
                                 st.success("Challenge gelöscht!")
                                 st.rerun()
 
-        if logged_in_player and aktive_challenge:
+        if logged_in_player and aktive_challenges:
             st.divider()
-            c_id_key = f"ch_id_{aktive_challenge['id']}"
-            already_done = c_id_key in logged_in_player.get("completed_challenges", [])
-            if already_done:
-                st.success("🎉 Du hast diese Wochen-Challenge bereits erfolgreich abgehakt! Starker Einsatz!")
-            else:
-                if st.button("🔥 Ich habe die Challenge geschafft!", type="primary"):
-                    logged_in_player["points"] = logged_in_player.get("points", 0) + int(aktive_challenge.get("points", 25))
-                    if "completed_challenges" not in logged_in_player: logged_in_player["completed_challenges"] = []
-                    logged_in_player["completed_challenges"].append(c_id_key)
-                    speichere_daten(st.session_state.data)
-                    st.balloons()
-                    st.success("Punkte gutgeschrieben!")
-                    st.rerun()
-        elif not logged_in_player: st.info("🔒 Logge dich in der Sidebar als Spieler ein, um die Challenge abzuhaken.")
+            st.markdown(f"**Hi {logged_in_player['name']}, hake hier deine geschafften Challenges ab:**")
+            
+            alle_geschafft = True
+            for c in aktive_challenges:
+                c_id_key = f"ch_id_{c['id']}"
+                already_done = c_id_key in logged_in_player.get("completed_challenges", [])
+                
+                if already_done:
+                    st.success(f"✅ **{c['title']}** – Erfolgreich abgehakt!")
+                else:
+                    alle_geschafft = False
+                    if st.button(f"🔥 Ich habe '{c['title']}' geschafft!", key=f"btn_done_{c['id']}", type="primary"):
+                        logged_in_player["points"] = logged_in_player.get("points", 0) + int(c.get("points", 25))
+                        if "completed_challenges" not in logged_in_player: logged_in_player["completed_challenges"] = []
+                        logged_in_player["completed_challenges"].append(c_id_key)
+                        speichere_daten(st.session_state.data)
+                        st.balloons()
+                        st.success(f"Punkte für '{c['title']}' gutgeschrieben!")
+                        st.rerun()
+            
+            if alle_geschafft:
+                st.info("🏆 Wahnsinn! Du hast bereits alle Aufgaben für diese Woche erledigt!")
+                
+        elif not logged_in_player and aktive_challenges:
+            st.info("🔒 Logge dich in der Sidebar als Spieler ein, um die Challenges abzuhaken.")
 
     with c_sub2:
         st.markdown("### 🧩 Taktik-Quiz & Punkte-Konto")
