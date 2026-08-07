@@ -1586,9 +1586,35 @@ with st.sidebar:
     if is_trainer:
         st.query_params["trainer"] = "1"
         st.success("👨‍🍳 Trainer-Modus aktiv")
-        if not gemini_key:
-            gemini_key_input = st.text_input("🔑 Google Gemini API Key:", type="password", key="gemini_key_input")
-            gemini_key = gemini_key_input.strip()
+        with st.expander("⚙️ Erweitere API-Einstellungen", expanded=False):
+            gemini_key_input = st.text_input(
+                "🔑 Gemini API Key (Manuelle Eingabe):", 
+                value=gemini_key if gemini_key else "", 
+                type="password", 
+                key="gemini_key_input"
+            )
+            if gemini_key_input:
+                gemini_key = gemini_key_input.strip()
+                
+            # --- Live Status-Ampel für den API-Key ---
+            if gemini_key:
+                try:
+                    # Blitzschneller Check bei Google
+                    test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}"
+                    test_res = requests.get(test_url, timeout=2)
+                    
+                    if test_res.status_code == 200:
+                        st.success("🟢 API-Key gültig & verbunden!")
+                    elif test_res.status_code == 400:
+                        st.error("🔴 Ungültiges Format (Leerzeichen?)")
+                    elif test_res.status_code == 401:
+                        st.error("🔴 Key abgelehnt (Nicht autorisiert)")
+                    else:
+                        st.warning(f"🟡 Fehler (Code: {test_res.status_code})")
+                except requests.exceptions.RequestException:
+                    st.warning("⚪ Keine Internetverbindung")
+            else:
+                st.info("⚪ Kein Key hinterlegt")
     else:
         if "trainer" in st.query_params: del st.query_params["trainer"]
         st.info("👪 Eltern-Modus active")
