@@ -18,15 +18,6 @@ try:
 except ImportError:
     pass
 
-# --- GEMINI KI PAKET IMPORTER (NEUES SDK) ---
-try:
-  from google import genai
-  from google.genai import types
-
-  HAS_GEMINI_LIB = True
-except ImportError:
-  HAS_GEMINI_LIB = False
-
 # --- KONFIGURATION & SETUP ---
 st.set_page_config(
     page_title="Alsterbrüder", 
@@ -1154,7 +1145,7 @@ def get_gemini_json_text(prompt, api_key):
 
 # --- ECHTE GEMINI KI-GENERATOREN ---
 def generiere_echte_ki_fragen(thema, api_key):
-    if not HAS_GEMINI_LIB or not api_key: return None
+    if not api_key: return None
     try:
         prompt = (f"Erstelle exakt 2 Multiple-Choice-Taktikfragen für U13-Fußballer zum Thema '{thema}'.\n"
                   "GIB AUSSCHLIESSLICH EIN SAUBERES JSON-ARRAY ZURÜCK!\n"
@@ -1195,7 +1186,7 @@ def generiere_echte_ki_fragen(thema, api_key):
         return None
 
 def generiere_echte_ki_challenges(thema, api_key):
-    if not HAS_GEMINI_LIB or not api_key: return None
+    if not api_key: return None
     try:
         prompt = (f"Erstelle exakt 2 Wochen-Challenges für U13-Fußballer zum Thema '{thema}'.\n"
                   "GIB AUSSCHLIESSLICH EIN SAUBERES JSON-ARRAY ZURÜCK!\n"
