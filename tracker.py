@@ -134,7 +134,9 @@ def init_db():
 init_db()
 
 POSITIONS = [
-    "TW", "IV", "LV", "RV", "ZDM", "ZM", "ZOM", "LM", "RM", "LF", "RF", "ST"
+    "TW", "IV", "LIV", "RIV", "RV", "LV", 
+    "LZDM", "RZDM", "ZDM", "LZM", "RZM", "ZM", "LZOM", "RZOM", "ZOM", "LM", "RM", 
+    "LS", "RS", "MS", "LF", "RF"
 ]
 
 # --- STANDARDISIERTE 5 TRAININGS-PHASEN ---
@@ -148,8 +150,11 @@ PHASEN_NAMEN = [
 
 # --- SICHERE HOLUNG DER SENSIBLEN DATEN (SECRETS) ---
 def get_secret_value(key_name, default_val=""):
-    if key_name in st.secrets:
-        return str(st.secrets[key_name]).strip()
+    try:
+        if key_name in st.secrets:
+            return str(st.secrets[key_name]).strip()
+    except Exception:
+        pass
     return default_val
 
 API_URL = get_secret_value("API_URL", "")
@@ -160,13 +165,54 @@ def get_background_gemini_key():
 
 # --- HILFSFUNKTIONEN ---
 def sind_verwandt(pos1, pos2):
-    verwandte_paare = [
-        {"ZM", "ZOM"},
-        {"ZM", "ZDM"},
-        {"RV", "LV"},
-        {"RM", "LM"}
-    ]
-    return {pos1, pos2} in verwandte_paare
+    # Exakte Positions-Familien nach Coach-Vorgabe:
+    # 1. Reine DM-Familie (kein OM!)
+    dm_familie = {"ZDM", "RZDM", "LZDM", "ZM", "RZM", "LZM"}
+    # 2. Reine OM-Familie (kein DM!)
+    om_familie = {"ZOM", "RZOM", "LZOM", "ZM", "RZM", "LZM"}
+    # 3. ZM-Allrounder (kann das gesamte Zentrum bedienen)
+    zm_familie = {"ZM", "ZOM", "RZOM", "LZOM", "RZM", "LZM", "ZDM", "RZDM", "LZDM"}
+    
+    # 4. Abwehr- & Außenbahn-Familien
+    iv_familie = {"IV", "LIV", "RIV"}
+    av_familie = {"RV", "LV"}
+    fluegel_familie = {"LF", "RF", "RM", "LM"}
+    sturm_familie = {"MS", "RS", "LS"}
+
+    # Prüfen, wer mit wem verwandt ist:
+    if pos1 in dm_familie and pos2 in dm_familie:
+        # Verhindert strikt, dass ein ZDM als ZOM/LZOM/RZOM aufgestellt wird
+        if "ZDM" in pos1 and ("ZOM" in pos2): return False
+        return True
+        
+    if pos1 in om_familie and pos2 in om_familie:
+        # Verhindert strikt, dass ein ZOM als ZDM/LZDM/RZDM aufgestellt wird
+        if "ZOM" in pos1 and ("ZDM" in pos2): return False
+        return True
+
+    if pos1 in zm_familie and pos2 in zm_familie:
+        # Wenn die primäre Position ZM/RZM/LZM ist, geht das gesamte Zentrum
+        if pos1 in {"ZM", "RZM", "LZM"}: return True
+
+    for fam in [iv_familie, av_familie, fluegel_familie, sturm_familie]:
+        if pos1 in fam and pos2 in fam:
+            return True
+            
+    return False
+
+def kurzes_namensformat(vollname, alle_namen_liste):
+    teile = vollname.strip().split()
+    if not teile:
+        return ""
+    vorname = teile[0]
+    nachname = teile[1] if len(teile) > 1 else ""
+
+    # Prüfen, ob der Vorname mehrmals im Kader vorkommt
+    vornamen_anzahl = sum(1 for n in alle_namen_liste if n.strip().split()[0].lower() == vorname.lower())
+
+    if vornamen_anzahl > 1 and nachname:
+        return f"{vorname} {nachname[0]}."
+    return vorname
 
 def berechne_level(punkte):
     if punkte >= 300: return "👑 Alsterbrüder-Legende"
@@ -1497,6 +1543,14 @@ def lade_daten():
     if "active_quiz_ids" not in data: 
         data["active_quiz_ids"] = [q["id"] for q in data["quiz_pool"][:2]] if data["quiz_pool"] else []
 
+    if "formation_presets" not in data:
+        data["formation_presets"] = {
+            "Standard (5+1)": {
+                "def_b": ["LIV", "RIV"], "mid_b": ["LZM", "RZM"], "att_b": ["MS"],
+                "def_g": ["LIV", "RIV"], "mid_g": ["LZM", "RZM"], "att_g": ["MS"]
+            }
+        }
+
     for p in data.get("players", []):
         if "role" not in p: p["role"] = "Spieler"
         if "number" not in p: p["number"] = ""
@@ -1525,6 +1579,8 @@ def _cloud_sync_worker(payload_str, url):
 # --- PFEILSCHNELLE SPEICHERFUNKTION ---
 def speichere_daten(data):
     lade_daten.clear() # Leert den Cache, damit beim nächsten Reload die frischen Daten geladen werden!
+    berechne_statistiken.clear() # NEU: Statistik-Cache bei neuen Daten sofort leeren!
+    
     st.session_state.data = data
     payload_str = json.dumps(data, ensure_ascii=False)
     
@@ -1534,6 +1590,16 @@ def speichere_daten(data):
         c.execute('REPLACE INTO store (id, data) VALUES ("main", ?)', (payload_str,))
         conn.commit()
         conn.close()
+        
+        # --- NEU: Automatische Backup-Zeitmaschine ---
+        if not os.path.exists("backups"):
+            os.makedirs("backups")
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        backup_path = os.path.join("backups", f"alsterbrueder_backup_{timestamp}.json")
+        with open(backup_path, "w", encoding="utf-8") as f:
+            f.write(payload_str)
+        # ---------------------------------------------
+        
     except Exception as e:
         st.error(f"❌ lokaler Speicherfehler (SQLite): {e}")
 
@@ -1618,6 +1684,7 @@ with st.sidebar:
                 st.warning("Für dich wurde noch keine PIN hinterlegt. Frage deinen Trainer!")
             else: st.error("Falsche PIN! ❌")
 
+@st.cache_data(show_spinner=False)
 def berechne_statistiken(spieler, erlaubte_typen=None):
     alle_events = spieler.get("training", [])
     if erlaubte_typen is not None: alle_events = [t for t in alle_events if t.get("type", "Training") in erlaubte_typen]
@@ -1647,28 +1714,32 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
     if (tore_gesamt + vorlagen_gesamt) >= 8: badges.append("🌟 Top-Scorer")
     if club == "🥇 Gold-Club": badges.append("👑 Trainingskönig")
 
+    winner_pics = spieler.get("winner_pics_count", 0)
+
     return {
         "Nr.": nr, "Name": spieler["name"], "Positionen": ", ".join(spieler["positions"]),
-        "Beteiligung": round(beteiligungs_quote), "🏃‍♂️ Spiele": spiele_gesamt, "Meilenstein": club,
-        "⚽ Tore": tore_gesamt, "🅰️ Vorlagen": vorlagen_gesamt, "🌟 Scorer": tore_gesamt + vorlagen_gesamt,
+        "Beteiligung": round(beteiligungs_quote), "🏃‍♂️ Spiele": spiele_gesamt, "📸 Siegerfotos": winner_pics,
+        "Meilenstein": club, "⚽ Tore": tore_gesamt, "🅰️ Vorlagen": vorlagen_gesamt, "🌟 Scorer": tore_gesamt + vorlagen_gesamt,
         "Badges": badges
     }
 
-def generiere_pitch_html(aufstellung_dict, ersatzbank_liste, team_name):
+def generiere_duo_pitch_html(t_blau, b_blau_list, layout_blau, t_gelb, b_gelb_list, layout_gelb):
     html_code = f"""
     <style>
-    .pitch-layout {{ display: flex; gap: 15px; justify-content: center; align-items: flex-start; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }}
-    .field {{ width: 330px; height: 440px; background-color: #2e7d32; background-image: linear-gradient(#388e3c 50%, #2e7d32 50%); background-size: 100% 40px; border: 4px solid #ffffff; border-radius: 8px; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }}
+    .duo-container {{ display: flex; gap: 20px; justify-content: center; align-items: flex-start; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: auto; padding: 10px 0; }}
+    .team-section {{ display: flex; gap: 10px; align-items: flex-start; background: #ffffff; padding: 10px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+    .team-title {{ font-size: 14px; font-weight: bold; margin-bottom: 8px; text-align: center; color: #1e293b; }}
+    .field {{ width: 300px; height: 420px; background-color: #2e7d32; background-image: linear-gradient(#388e3c 50%, #2e7d32 50%); background-size: 100% 40px; border: 4px solid #ffffff; border-radius: 8px; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }}
     .field::before {{ content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.5); }}
-    .center-circle {{ position: absolute; top: 50%; left: 50%; width: 70px; height: 70px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); }}
-    .slot {{ position: absolute; width: 80px; height: 50px; border: 1px dashed rgba(255,255,255,0.3); border-radius: 5px; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; }}
-    .slot-label {{ position: absolute; top: -12px; width: 100%; text-align: center; font-size: 9px; color: rgba(255,255,255,0.4); font-weight: bold; }}
-    .player {{ width: 74px; height: 44px; background: #facc15; color: #1e3a8a; border: 1px solid #eab308; border-radius: 4px; font-size: 11px; font-weight: bold; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.2); padding: 1px; box-sizing: border-box; }}
-    .player .nr {{ font-size: 9px; color: #ffffff; background: #1e3a8a; padding: 0px 3px; border-radius: 2px; margin-bottom: 1px; }}
+    .center-circle {{ position: absolute; top: 50%; left: 50%; width: 60px; height: 60px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); }}
+    .slot {{ position: absolute; width: 74px; height: 46px; border: 1px dashed rgba(255,255,255,0.35); border-radius: 5px; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; }}
+    .slot-label {{ position: absolute; top: -11px; width: 100%; text-align: center; font-size: 8.5px; color: rgba(255,255,255,0.6); font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }}
+    .player {{ width: 70px; height: 42px; background: #facc15; color: #1e3a8a; border: 1px solid #eab308; border-radius: 4px; font-size: 10.5px; font-weight: bold; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.25); padding: 1px; box-sizing: border-box; }}
+    .player .nr {{ font-size: 8.5px; color: #ffffff; background: #1e3a8a; padding: 0px 3px; border-radius: 2px; margin-bottom: 1px; }}
     .player .name-text {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }}
-    .bench {{ width: 150px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); max-height: 440px; overflow-y: auto; }}
-    .bench-title {{ font-size: 12px; font-weight: bold; color: #64748b; text-align: center; margin-bottom: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
-    .bench-zone {{ min-height: 380px; display: flex; flex-direction: column; gap: 6px; }}
+    .bench {{ width: 130px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); height: 420px; box-sizing: border-box; display: flex; flex-direction: column; }}
+    .bench-title {{ font-size: 11.5px; font-weight: bold; color: #64748b; text-align: center; margin-bottom: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
+    .bench-zone {{ flex: 1; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 100px; }}
     </style>
     <script>
     function allowDrop(ev) {{ ev.preventDefault(); }}
@@ -1686,18 +1757,44 @@ def generiere_pitch_html(aufstellung_dict, ersatzbank_liste, team_name):
         }}
     }}
     </script>
-    <div class="pitch-layout">
-        <div class="field">
-            <div class="center-circle"></div>
-            <div class="slot" style="left: 50%; top: 12%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">ST</span>{aufstellung_dict.get('ST', '')}</div>
-            <div class="slot" style="left: 18%; top: 38%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">LM</span>{aufstellung_dict.get('LM', '')}</div>
-            <div class="slot" style="left: 50%; top: 38%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">ZM</span>{aufstellung_dict.get('ZM', '')}</div>
-            <div class="slot" style="left: 82%; top: 38%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">RM</span>{aufstellung_dict.get('RM', '')}</div>
-            <div class="slot" style="left: 28%; top: 65%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">IV (L)</span>{aufstellung_dict.get('IV (L)', '')}</div>
-            <div class="slot" style="left: 72%; top: 65%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">IV (R)</span>{aufstellung_dict.get('IV (R)', '')}</div>
-            <div class="slot" style="left: 50%; top: 85%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">TW</span>{aufstellung_dict.get('TW', '')}</div>
+    <div class="duo-container">
+        <!-- TEAM BLAU -->
+        <div class="team-section">
+            <div>
+                <div class="team-title">🔵 Team Blau</div>
+                <div class="field">
+                    <div class="center-circle"></div>
+    """
+    for s in layout_blau:
+        html_code += f'<div class="slot" style="left: {s["x"]}%; top: {s["y"]}%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">{s["name"]}</span>{t_blau.get(s["id"], "")}</div>\n'
+        
+    html_code += f"""
+                </div>
+            </div>
+            <div class="bench">
+                <div class="bench-title">🔄 Ersatz Blau</div>
+                <div class="bench-zone" ondragover="allowDrop(event)" ondrop="drop(event)">{b_blau_list}</div>
+            </div>
         </div>
-        <div class="bench"><div class="bench-title">🔄 Ersatzbank</div><div class="bench-zone" ondragover="allowDrop(event)" ondrop="drop(event)">{ersatzbank_liste}</div></div>
+
+        <!-- TEAM GELB -->
+        <div class="team-section">
+            <div>
+                <div class="team-title">🟡 Team Gelb</div>
+                <div class="field">
+                    <div class="center-circle"></div>
+    """
+    for s in layout_gelb:
+        html_code += f'<div class="slot" style="left: {s["x"]}%; top: {s["y"]}%;" ondragover="allowDrop(event)" ondrop="drop(event)"><span class="slot-label">{s["name"]}</span>{t_gelb.get(s["id"], "")}</div>\n'
+        
+    html_code += f"""
+                </div>
+            </div>
+            <div class="bench">
+                <div class="bench-title">🔄 Ersatz Gelb</div>
+                <div class="bench-zone" ondragover="allowDrop(event)" ondrop="drop(event)">{b_gelb_list}</div>
+            </div>
+        </div>
     </div>
     """
     return html_code
@@ -1749,7 +1846,8 @@ if selected_tab == "📊 Übersicht":
         st.dataframe(df.drop(columns=["Badges"]), column_config={
             "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Name": st.column_config.TextColumn("Spielername"), 
             "Positionen": st.column_config.TextColumn("Positionen"), "Beteiligung": st.column_config.ProgressColumn("Trainingsbeteiligung", min_value=0, max_value=100, format="%d%%"), 
-            "🏃‍♂️ Spiele": st.column_config.NumberColumn("🏃‍♂️ Spiele", format="%d"), "Meilenstein": st.column_config.TextColumn("Meilenstein-Status"), 
+            "🏃‍♂️ Spiele": st.column_config.NumberColumn("🏃‍♂️ Spiele", format="%d"), "📸 Siegerfotos": st.column_config.NumberColumn("📸 Siegerfotos", format="%d"),
+            "Meilenstein": st.column_config.TextColumn("Meilenstein-Status"), 
             "⚽ Tore": st.column_config.NumberColumn("⚽ Tore", format="%d"), "🅰️ Vorlagen": st.column_config.NumberColumn("🅰️ Vorlagen", format="%d"), "🌟 Scorer": st.column_config.NumberColumn("🌟 Scorer", format="%d")
         }, hide_index=True, use_container_width=True)
         
@@ -1774,9 +1872,16 @@ if selected_tab == "📊 Übersicht":
         top_go = df.sort_values(by="⚽ Tore", ascending=False).iloc[0]
         top_sc = df.sort_values(by="🌟 Scorer", ascending=False).iloc[0]
         
+        # Top-Siegerfoto Spieler berechnen
+        top_winner_p = max(nur_spieler, key=lambda x: x.get("winner_pics_count", 0), default=None)
+        top_winner_name = top_winner_p["name"] if top_winner_p and top_winner_p.get("winner_pics_count", 0) > 0 else "-"
+        top_winner_count = top_winner_p.get("winner_pics_count", 0) if top_winner_p else 0
+
+        h_col1, h_col2, h_col3, h_col4 = st.columns(4)
         h_col1.metric("🔥 Trainings-König", top_tr["Name"], f"{top_tr['Beteiligung']}% Beteiligung")
         h_col2.metric("🎯 Top-Torjäger", top_go["Name"], f"{top_go['⚽ Tore']} Tore")
         h_col3.metric("🌟 Scorer-König", top_sc["Name"], f"{top_sc['🌟 Scorer']} Pkt ({top_sc['⚽ Tore']}T / {top_sc['🅰️ Vorlagen']}V)")
+        h_col4.metric("📸 Siegerfoto-King", top_winner_name, f"{top_winner_count}x auf dem Foto")
 
         st.write(""); st.divider(); st.markdown("### 📊 Team-Statistiken (Fokus-Ansicht)")
         fca_blue = "#1e3a8a"
@@ -2110,38 +2215,81 @@ if selected_tab == "🔍 Spieler-Profile":
         p = next(x for x in nur_spieler if x["name"] == selected_player_name)
         stats = berechne_statistiken(p)
         
-        # --- DYNAMISCHE FUT-STATS BERECHNUNG (GAMIFICATION) ---
-        # 1. Basiswerte holen
-        base_pac = int(p.get("base_pac", 75))
-        base_sho = int(p.get("base_sho", 60))
-        base_pas = int(p.get("base_pas", 65))
-        base_dri = int(p.get("base_dri", 70))
-        base_def = int(p.get("base_def", 55))
-        base_phy = int(p.get("base_phy", 65))
+        # --- GAUSS/GLÄTTUNG: SCHWELLENWERTE FÜR SAISONSTART & HIGHSCORES ---
+        # 1. Ausbalanciertere Profil-Vorlagen (Nebenstats bleiben in den 40er/50er Rängen)
+        POS_PROFILE = {
+            "TW":   {"PAC": 0.58, "SHO": 0.42, "PAS": 0.65, "DRI": 0.52, "DEF": 0.88, "PHY": 0.72},
+            "IV":   {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
+            "LIV":  {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
+            "RIV":  {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
+            "LV":   {"PAC": 0.80, "SHO": 0.50, "PAS": 0.68, "DRI": 0.68, "DEF": 0.78, "PHY": 0.78},
+            "RV":   {"PAC": 0.80, "SHO": 0.50, "PAS": 0.68, "DRI": 0.68, "DEF": 0.78, "PHY": 0.78},
+            "ZDM":  {"PAC": 0.65, "SHO": 0.52, "PAS": 0.75, "DRI": 0.68, "DEF": 0.82, "PHY": 0.80},
+            "LZDM": {"PAC": 0.65, "SHO": 0.52, "PAS": 0.75, "DRI": 0.68, "DEF": 0.82, "PHY": 0.80},
+            "RZDM": {"PAC": 0.65, "SHO": 0.52, "PAS": 0.75, "DRI": 0.68, "DEF": 0.82, "PHY": 0.80},
+            "ZM":   {"PAC": 0.70, "SHO": 0.62, "PAS": 0.82, "DRI": 0.74, "DEF": 0.68, "PHY": 0.74},
+            "LZM":  {"PAC": 0.70, "SHO": 0.62, "PAS": 0.82, "DRI": 0.74, "DEF": 0.68, "PHY": 0.74},
+            "RZM":  {"PAC": 0.70, "SHO": 0.62, "PAS": 0.82, "DRI": 0.74, "DEF": 0.68, "PHY": 0.74},
+            "ZOM":  {"PAC": 0.74, "SHO": 0.72, "PAS": 0.82, "DRI": 0.82, "DEF": 0.52, "PHY": 0.64},
+            "LZOM": {"PAC": 0.74, "SHO": 0.72, "PAS": 0.82, "DRI": 0.82, "DEF": 0.52, "PHY": 0.64},
+            "RZOM": {"PAC": 0.74, "SHO": 0.72, "PAS": 0.82, "DRI": 0.82, "DEF": 0.52, "PHY": 0.64},
+            "LM":   {"PAC": 0.82, "SHO": 0.64, "PAS": 0.74, "DRI": 0.80, "DEF": 0.52, "PHY": 0.68},
+            "RM":   {"PAC": 0.82, "SHO": 0.64, "PAS": 0.74, "DRI": 0.80, "DEF": 0.52, "PHY": 0.68},
+            "LF":   {"PAC": 0.85, "SHO": 0.74, "PAS": 0.70, "DRI": 0.84, "DEF": 0.46, "PHY": 0.65},
+            "RF":   {"PAC": 0.85, "SHO": 0.74, "PAS": 0.70, "DRI": 0.84, "DEF": 0.46, "PHY": 0.65},
+            "MS":   {"PAC": 0.78, "SHO": 0.85, "PAS": 0.60, "DRI": 0.75, "DEF": 0.44, "PHY": 0.72},
+            "LS":   {"PAC": 0.78, "SHO": 0.84, "PAS": 0.60, "DRI": 0.75, "DEF": 0.44, "PHY": 0.70},
+            "RS":   {"PAC": 0.78, "SHO": 0.84, "PAS": 0.60, "DRI": 0.75, "DEF": 0.44, "PHY": 0.70}
+        }
 
-        # 2. Reale Leistungs-Boni berechnen
-        bonus_sho = stats["⚽ Tore"] * 2  # +2 pro Tor
-        bonus_pas = stats["🅰️ Vorlagen"] * 2  # +2 pro Vorlage
+        DEFAULT_MUSTER = {"PAC": 0.68, "SHO": 0.60, "PAS": 0.68, "DRI": 0.68, "DEF": 0.58, "PHY": 0.68}
+        PRIO_GEWICHTE = [0.50, 0.25, 0.15, 0.06, 0.04]
         
-        # Trainingsbeteiligung: Über 60% gibt Pluspunkte, darunter Abzug
-        bonus_phy = int((stats["Beteiligung"] - 60) / 3) 
+        pos_prios = p.get("positions", ["ZM"])
+        if not pos_prios: pos_prios = ["ZM"]
+
+        gewichte_summe = 0
+        mixed_muster = {"PAC": 0.0, "SHO": 0.0, "PAS": 0.0, "DRI": 0.0, "DEF": 0.0, "PHY": 0.0}
+
+        for idx, pos_code in enumerate(pos_prios[:5]):
+            w = PRIO_GEWICHTE[idx]
+            prof = POS_PROFILE.get(pos_code, DEFAULT_MUSTER)
+            for attr in mixed_muster:
+                mixed_muster[attr] += prof[attr] * w
+            gewichte_summe += w
+
+        if gewichte_summe > 0:
+            for attr in mixed_muster:
+                mixed_muster[attr] /= gewichte_summe
+
+        # 2. Reale Leistungs-Punkte mit flacherer Zuwachskurve
+        gesamt_tr = len(p.get("training", []))
+        anw_tr = len([t for t in p.get("training", []) if t.get("present")])
+        tr_quote = (anw_tr / gesamt_tr * 100) if gesamt_tr > 0 else 60
+
+        bonus_leistung = (
+            (stats["⚽ Tore"] * 6) + 
+            (stats["🅰️ Vorlagen"] * 5) + 
+            (len(p.get("completed_challenges", [])) * 4) + 
+            (len(p.get("solved_quizzes", [])) * 4) + 
+            (p.get("winner_pics_count", 0) * 5) + 
+            (stats["🏃‍♂️ Spiele"] * 2.5) + 
+            ((tr_quote - 50) * 0.3)
+        )
         
-        # Fleiß bei Challenges macht schneller/fitter
-        bonus_pac = len(p.get("completed_challenges", [])) * 2 
-        
-        # Taktik-Quizze fördern Spielintelligenz & Technik
-        bonus_dri = len(p.get("solved_quizzes", [])) * 2 
-        
-        # Spielpraxis härtet defensiv ab
-        bonus_def = stats["🏃‍♂️ Spiele"] * 1 
-        
-        # 3. Finale Werte berechnen (Gedeckelt zwischen 1 und 99)
-        pac = min(max(base_pac + bonus_pac, 1), 99)
-        sho = min(max(base_sho + bonus_sho, 1), 99)
-        pas = min(max(base_pas + bonus_pas, 1), 99)
-        dri = min(max(base_dri + bonus_dri, 1), 99)
-        df_val = min(max(base_def + bonus_def, 1), 99)
-        phy = min(max(base_phy + bonus_phy, 1), 99)
+        # Start-OVR liegt bei 60 (solider Jugendspieler) und steigt nur durch echte Meilensteine in Richtung 90+
+        ziel_durchschnitt = min(max(60 + int(bonus_leistung / 8), 45), 95)
+
+        muster_schnitt = sum(mixed_muster.values()) / 6
+        skalierung = ziel_durchschnitt / muster_schnitt if muster_schnitt > 0 else 1
+
+        # 3. Finale Einzelwerte berechnen (Gedeckelt auf max 99, Einstieg in den 80er/90er Rängen erfordert Top-Leistung)
+        pac = min(max(int(mixed_muster["PAC"] * skalierung), 1), 99)
+        sho = min(max(int(mixed_muster["SHO"] * skalierung), 1), 99)
+        pas = min(max(int(mixed_muster["PAS"] * skalierung), 1), 99)
+        dri = min(max(int(mixed_muster["DRI"] * skalierung), 1), 99)
+        df_val = min(max(int(mixed_muster["DEF"] * skalierung), 1), 99)
+        phy = min(max(int(mixed_muster["PHY"] * skalierung), 1), 99)
         
         # 4. Gesamt-Rating (OVR) berechnen
         ovr = int((pac + sho + pas + dri + df_val + phy) / 6)
@@ -2739,9 +2887,84 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
         speichere_daten(st.session_state.data)
         st.success("Kader erfolgreich aktualisiert!")
 
-# --- TAB 5: SPIEL LOGGEN ---
-if selected_tab == "⚽ Spiel loggen" and is_trainer:
-    st.subheader("⚽ Spieltag Statistiken loggen")
+# --- TAB 5: TRAINING & SPIEL LOGGEN ---
+if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and is_trainer:
+    st.subheader("📝 Trainings- & Spieltags-Log")
+    
+    tab_tr_log, tab_match_log = st.tabs(["🏃‍♂️ Training loggen", "⚽ Spieltag loggen"])
+    
+    with tab_tr_log:
+        st.markdown("#### 🏃‍♂️ Trainingseinheit protokollieren")
+        
+        c_tr1, c_tr2 = st.columns([1, 2])
+        tr_datum = c_tr1.date_input("Datum der Einheit:", datetime.today(), key="tr_log_datum")
+        tr_typ = c_tr2.selectbox("Event-Typ:", ["Training", "Zusatztraining", "Hallentraining"], key="tr_log_typ")
+        
+        tr_kommentar = st.text_area("📝 Trainings-Notizen / Durchgeführte Übungen:", placeholder="z. B. Schwerpunkt Gegenpressing. Passübung im Viertelfeld lief super, im Rondo noch zu viele Ballverluste.", key="tr_log_kommentar")
+        
+        st.divider()
+        st.markdown("#### 👥 Anwesenheit & 📸 Siegerfoto-Check")
+        st.caption("Hak an, wer da war – und wähle die Jungs aus, die das Abschlussspiel gewonnen haben!")
+        
+        tr_spieler_daten = []
+        for p in nur_spieler:
+            tr_spieler_daten.append({
+                "ID": str(p["id"]),
+                "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None,
+                "Name": p["name"],
+                "Anwesend ⚽": True,
+                "🏆 Siegerfoto-Team": False
+            })
+            
+        df_tr_log = pd.DataFrame(tr_spieler_daten)
+        if not df_tr_log.empty:
+            df_tr_log = df_tr_log.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
+            
+        editiertes_tr_log = st.data_editor(
+            df_tr_log,
+            hide_index=True,
+            disabled=["ID", "Nr.", "Name"],
+            column_config={
+                "ID": None,
+                "Nr.": st.column_config.NumberColumn("Nr.", format="%d"),
+                "Anwesend ⚽": st.column_config.CheckboxColumn("Anwesend ⚽"),
+                "🏆 Siegerfoto-Team": st.column_config.CheckboxColumn("🏆 Siegerfoto?")
+            },
+            use_container_width=True
+        )
+        
+        if st.button("💾 Trainingseinheit speichern", type="primary", key="save_tr_log_btn"):
+            p_d_str = str(tr_datum)
+            p_y_str = str(tr_typ)
+            
+            for index, row in editiertes_tr_log.iterrows():
+                sp = next((x for x in st.session_state.data["players"] if str(x["id"]) == str(row["ID"])), None)
+                if sp:
+                    if "training" not in sp: sp["training"] = []
+                    
+                    is_anw = bool(row["Anwesend ⚽"])
+                    is_winner = bool(row["🏆 Siegerfoto-Team"])
+                    
+                    # Training eintragen oder aktualisieren
+                    bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == p_d_str and t.get("type") == p_y_str), None)
+                    if bestehender_eintrag:
+                        bestehender_eintrag["present"] = is_anw
+                        bestehender_eintrag["note"] = tr_kommentar.strip()
+                    else:
+                        sp["training"].append({"date": p_d_str, "type": p_y_str, "present": is_anw, "note": tr_kommentar.strip()})
+                        
+                    # Siegerfoto-Zähler anpassen
+                    if is_winner:
+                        sp["winner_pics_count"] = sp.get("winner_pics_count", 0) + 1
+                        sp["points"] = sp.get("points", 0) + 15  # +15 EP für das Siegerfoto
+                        
+            speichere_daten(st.session_state.data)
+            st.balloons()
+            st.success("🎉 Trainingseinheit & Siegerfoto-Punkte erfolgreich gespeichert!")
+            st.rerun()
+
+    with tab_match_log:
+        st.markdown("#### ⚽ Spieltag Statistiken loggen")
     c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
     col_blau, col_gelb = st.columns(2)
     with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
@@ -2772,20 +2995,114 @@ if selected_tab == "⚽ Spiel loggen" and is_trainer:
 # --- TAB 6: KI TWIN-TEAMS + VOLLSTÄNDIGE ALGORITHMIK ---
 if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
     st.subheader("🤖 KI Twin-Aufstellung")
+    
+    st.markdown("#### 💾 Formations-Vorlagen")
+    presets = st.session_state.data.get("formation_presets", {})
+    preset_namen = ["-- Eigene Formation wählen --"] + list(presets.keys())
+    
+    col_preset_sel, col_preset_save = st.columns([2, 1])
+    
+    selected_preset = col_preset_sel.selectbox("Vorlage laden:", preset_namen, key="preset_selector")
+    
+    # Ausgewählte Vorlage in die Multiselects laden
+    if selected_preset != "-- Eigene Formation wählen --" and st.session_state.get("last_loaded_preset") != selected_preset:
+        p_data = presets[selected_preset]
+        st.session_state["def_b"] = p_data.get("def_b", [])
+        st.session_state["mid_b"] = p_data.get("mid_b", [])
+        st.session_state["att_b"] = p_data.get("att_b", [])
+        st.session_state["def_g"] = p_data.get("def_g", [])
+        st.session_state["mid_g"] = p_data.get("mid_g", [])
+        st.session_state["att_g"] = p_data.get("att_g", [])
+        st.session_state["last_loaded_preset"] = selected_preset
+        st.rerun()
+
+    with col_preset_save.popover("💾 Vorlage speichern"):
+        neuer_preset_name = st.text_input("Name der Vorlage:", placeholder="z.B. 7+1 Offensiv")
+        if st.button("Speichern", type="primary", use_container_width=True):
+            if neuer_preset_name.strip():
+                if "formation_presets" not in st.session_state.data:
+                    st.session_state.data["formation_presets"] = {}
+                st.session_state.data["formation_presets"][neuer_preset_name.strip()] = {
+                    "def_b": st.session_state.get("def_b", []),
+                    "mid_b": st.session_state.get("mid_b", []),
+                    "att_b": st.session_state.get("att_b", []),
+                    "def_g": st.session_state.get("def_g", []),
+                    "mid_g": st.session_state.get("mid_g", []),
+                    "att_g": st.session_state.get("att_g", [])
+                }
+                speichere_daten(st.session_state.data)
+                st.success(f"Vorlage '{neuer_preset_name}' gespeichert!")
+                st.rerun()
+            else:
+                st.error("Bitte einen Namen eingeben.")
+
+    st.markdown("#### ⚙️ Formations-Baukasten (Unabhängig pro Team)")
+    st.caption("Stelle für Team Blau und Gelb individuelle Formationen und Spieleranzahlen ein. Der TW ist immer gesetzt.")
+    
+    c_form_b, c_form_g = st.columns(2)
+    
+    with c_form_b:
+        st.markdown("##### 🔵 Team Blau")
+        def_b = st.multiselect("🛡️ Abwehr (Blau)", options=["LV", "LIV", "IV", "RIV", "RV"], default=["LIV", "RIV"], key="def_b")
+        mid_b = st.multiselect("🧭 Mittelfeld (Blau)", options=["LM", "LZDM", "ZDM", "RZDM", "LZM", "ZM", "RZM", "LZOM", "ZOM", "RZOM", "RM"], default=["LZM", "RZM"], key="mid_b")
+        att_b = st.multiselect("🎯 Sturm (Blau)", options=["LF", "LS", "MS", "RS", "RF"], default=["MS"], key="att_b")
+        st.info(f"Feldspieler Blau: {len(def_b)+len(mid_b)+len(att_b)}")
+        
+    with c_form_g:
+        st.markdown("##### 🟡 Team Gelb")
+        def_g = st.multiselect("🛡️ Abwehr (Gelb)", options=["LV", "LIV", "IV", "RIV", "RV"], default=["LIV", "RIV"], key="def_g")
+        mid_g = st.multiselect("🧭 Mittelfeld (Gelb)", options=["LM", "LZDM", "ZDM", "RZDM", "LZM", "ZM", "RZM", "LZOM", "ZOM", "RZOM", "RM"], default=["LZM", "RZM"], key="mid_g")
+        att_g = st.multiselect("🎯 Sturm (Gelb)", options=["LF", "LS", "MS", "RS", "RF"], default=["MS"], key="att_g")
+        st.info(f"Feldspieler Gelb: {len(def_g)+len(mid_g)+len(att_g)}")
+        
+    # Koordinaten- und Prio-Konfiguration für unser HTML-Taktikboard
+    POS_CONFIG = {
+        "TW":   {"x": 50, "y": 85, "prios": ["TW"]},
+        "LV":   {"x": 15, "y": 65, "prios": ["LV", "LM", "LIV", "IV"]},
+        "LIV":  {"x": 30, "y": 65, "prios": ["LIV", "IV", "LV", "LZDM"]},
+        "IV":   {"x": 50, "y": 65, "prios": ["IV", "LIV", "RIV", "ZDM"]},
+        "RIV":  {"x": 70, "y": 65, "prios": ["RIV", "IV", "RV", "RZDM"]},
+        "RV":   {"x": 85, "y": 65, "prios": ["RV", "RM", "RIV", "IV"]},
+        "LM":   {"x": 15, "y": 40, "prios": ["LM", "LF", "LV", "LZM"]},
+        "LZDM": {"x": 35, "y": 52, "prios": ["LZDM", "ZDM", "LZM", "LIV"]},
+        "ZDM":  {"x": 50, "y": 52, "prios": ["ZDM", "LZDM", "RZDM", "ZM"]},
+        "RZDM": {"x": 65, "y": 52, "prios": ["RZDM", "ZDM", "RZM", "RIV"]},
+        "LZM":  {"x": 35, "y": 40, "prios": ["LZM", "ZM", "LZDM", "LZOM"]},
+        "ZM":   {"x": 50, "y": 40, "prios": ["ZM", "LZM", "RZM", "ZDM", "ZOM"]},
+        "RZM":  {"x": 65, "y": 40, "prios": ["RZM", "ZM", "RZDM", "RZOM"]},
+        "LZOM": {"x": 35, "y": 28, "prios": ["LZOM", "ZOM", "LZM", "LS"]},
+        "ZOM":  {"x": 50, "y": 28, "prios": ["ZOM", "LZOM", "RZOM", "ZM", "MS"]},
+        "RZOM": {"x": 65, "y": 28, "prios": ["RZOM", "ZOM", "RZM", "RS"]},
+        "RM":   {"x": 85, "y": 40, "prios": ["RM", "RF", "RV", "RZM"]},
+        "LF":   {"x": 15, "y": 15, "prios": ["LF", "LM", "LS", "MS"]},
+        "LS":   {"x": 35, "y": 15, "prios": ["LS", "MS", "LF", "LZOM"]},
+        "MS":   {"x": 50, "y": 15, "prios": ["MS", "LS", "RS", "ZOM"]},
+        "RS":   {"x": 65, "y": 15, "prios": ["RS", "MS", "RF", "RZOM"]},
+        "RF":   {"x": 85, "y": 15, "prios": ["RF", "RM", "RS", "MS"]}
+    }
+
+    gewaehltes_layout_blau = [{"id": "TW", "name": "TW", "x": 50, "y": 85, "prios": ["TW"]}]
+    for p in def_b + mid_b + att_b:
+        if p in POS_CONFIG: gewaehltes_layout_blau.append({"id": p, "name": p, "x": POS_CONFIG[p]["x"], "y": POS_CONFIG[p]["y"], "prios": POS_CONFIG[p]["prios"]})
+
+    gewaehltes_layout_gelb = [{"id": "TW", "name": "TW", "x": 50, "y": 85, "prios": ["TW"]}]
+    for p in def_g + mid_g + att_g:
+        if p in POS_CONFIG: gewaehltes_layout_gelb.append({"id": p, "name": p, "x": POS_CONFIG[p]["x"], "y": POS_CONFIG[p]["y"], "prios": POS_CONFIG[p]["prios"]})
+
     st.markdown("#### 📋 Kader-Zuweisung")
     zuweisungs_liste = []
     for p in nur_spieler:
         zuweisungs_liste.append({"ID": str(p["id"]), "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Hauptposition": p["positions"][0] if p["positions"] else "-", "Zuweisung / Status": st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")})
     df_zuweisung = pd.DataFrame(zuweisungs_liste)
     if not df_zuweisung.empty: df_zuweisung = df_zuweisung.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
-    editiertes_kader_zuweisung = st.data_editor(df_zuweisung, hide_index=True, disabled=["ID", "Nr.", "Name", "Hauptposition"], column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Zuweisung / Status": st.column_config.SelectboxColumn(options=["🤖 KI entscheidet", "🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Abwesend"], required=True)}, use_container_width=True)
+    editiertes_kader_zuweisung = st.data_editor(df_zuweisung, hide_index=True, disabled=["ID", "Nr.", "Name", "Hauptposition"], column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Zuweisung / Status": st.column_config.SelectboxColumn(options=["🤖 KI entscheidet", "🔵 Team Blau", "🟡 Team Gelb", "🔵 Ersatz Blau", "🟡 Ersatz Gelb", "❌ Abwesend"], required=True)}, use_container_width=True)
 
     btn_col1, btn_col2 = st.columns(2)
     berechnen_klick = btn_col1.button("🤖 KI Aufstellung berechnen", type="primary", use_container_width=True)
     alternative_klick = btn_col2.button("🔄 Alternative Variante berechnen", type="secondary", use_container_width=True)
 
     if berechnen_klick or alternative_klick:
-        blau_fest, gelb_fest, ki_pool, bench_fest = [], [], [], []
+        blau_fest, gelb_fest, ersatz_blau_fest, ersatz_gelb_fest, ki_pool = [], [], [], [], []
         for index, row in editiertes_kader_zuweisung.iterrows():
             p_id, status = int(row["ID"]), row["Zuweisung / Status"]
             st.session_state.zuweisungen[str(p_id)] = status
@@ -2795,14 +3112,16 @@ if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
                 stats = berechne_statistiken(p_data); c_info = {"id": p_id, "name": p_data["name"], "nr": p_data.get("number", ""), "positions": p_data.get("positions", ["ZM"]), "beteiligung": stats["Beteiligung"]}
                 if status == "🔵 Team Blau": blau_fest.append(c_info)
                 elif status == "🟡 Team Gelb": gelb_fest.append(c_info)
+                elif status == "🔵 Ersatz Blau": ersatz_blau_fest.append(c_info)
+                elif status == "🟡 Ersatz Gelb": ersatz_gelb_fest.append(c_info)
                 elif status == "🤖 KI entscheidet": ki_pool.append(c_info)
-                elif status == "🔄 Ersatzbank": bench_fest.append(c_info)
 
         if alternative_klick: random.shuffle(blau_fest); random.shuffle(gelb_fest); random.shuffle(ki_pool); st.toast("Alternative geladen!")
         else: blau_fest.sort(key=lambda x: x["beteiligung"], reverse=True); gelb_fest.sort(key=lambda x: x["beteiligung"], reverse=True); ki_pool.sort(key=lambda x: x["beteiligung"], reverse=True)
 
-        def waehle_spieler_taktik_mix(praeferenzen, team_id, rollen_name, is_alt):
+        def waehle_spieler_taktik_mix(praeferenzen, team_id, rollen_id, is_alt):
             hoechster_score, bester = -1, None
+            # Ersatzspieler werden NIEMALS in die Startelf der anderen Mannschaft gesteckt!
             pool = (blau_fest + ki_pool) if team_id == "Blau" else (gelb_fest + ki_pool)
             for c in pool:
                 if c["name"] in genutzte_namen: continue
@@ -2818,31 +3137,62 @@ if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
                 if score > hoechster_score: hoechster_score = score; bester = c
             if bester:
                 genutzte_namen.add(bester["name"])
-                st.session_state[f"raw_{team_id.lower()[0]}_{rollen_name}"] = bester["name"]
                 nr_b = f'<span class="nr">#{bester["nr"]}</span>' if bester["nr"] else ''
-                return f'<div class="player" id="{team_id}_{rollen_name}" draggable="true" ondragstart="drag(event)">{nr_b}<span class="name-text">{bester["name"]}</span></div>'
-            st.session_state[f"raw_{team_id.lower()[0]}_{rollen_name}"] = "-"
+                alle_kader_namen = [sp["name"] for sp in nur_spieler]
+                anzeige_name = kurzes_namensformat(bester["name"], alle_kader_namen)
+                return f'<div class="player" id="{team_id}_{rollen_id}" draggable="true" ondragstart="drag(event)">{nr_b}<span class="name-text">{anzeige_name}</span></div>'
             return ""
 
-        rollen = [("TW", ["TW"]), ("ST", ["ST", "LF", "RF", "ZOM"]), ("LM", ["LM", "LF", "ZM"]), ("ZM", ["ZM", "ZDM", "ZOM"]), ("RM", ["RM", "RF", "ZM"]), ("IV (L)", ["IV", "LV", "ZDM"]), ("IV (R)", ["IV", "RV", "ZDM"])]
         t_blau, t_gelb, genutzte_namen = {}, {}, set(); is_alt = bool(alternative_klick)
-        for i, (r_name, pr) in enumerate(rollen):
-            if i % 2 == 0: t_blau[r_name] = waehle_spieler_taktik_mix(pr, "Blau", r_name, is_alt); t_gelb[r_name] = waehle_spieler_taktik_mix(pr, "Gelb", r_name, is_alt)
-            else: t_gelb[r_name] = waehle_spieler_taktik_mix(pr, "Gelb", r_name, is_alt); t_blau[r_name] = waehle_spieler_taktik_mix(pr, "Blau", r_name, is_alt)
-
-        ersatz = [c for c in blau_fest + gelb_fest + ki_pool + bench_fest if c["name"] not in genutzte_namen]
-        b_blau_list = [f'<div class="player" id="bBlau_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{x["name"]}</span></div>' for i, x in enumerate(ersatz)]
-        b_gelb_list = [f'<div class="player" id="bGelb_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{x["name"]}</span></div>' for i, x in enumerate(ersatz)]
         
-        st.session_state.pitch_blau_html = generiere_pitch_html(t_blau, "".join(b_blau_list), "Team Blau")
-        st.session_state.pitch_gelb_html = generiere_pitch_html(t_gelb, "".join(b_gelb_list), "Team Gelb")
+        # KI füllt Team Blau
+        for slot in gewaehltes_layout_blau:
+            r_id = slot["id"]
+            t_blau[r_id] = waehle_spieler_taktik_mix(slot["prios"], "Blau", r_id, is_alt)
+            
+        # KI füllt Team Gelb
+        for slot in gewaehltes_layout_gelb:
+            r_id = slot["id"]
+            t_gelb[r_id] = waehle_spieler_taktik_mix(slot["prios"], "Gelb", r_id, is_alt)
 
-    if "pitch_blau_html" in st.session_state:
-        st.info("💡 Taktikboard aktiv: Karten können per Drag & Drop verschoben werden.")
-        c_p1, c_p2 = st.columns(2)
-        with c_p1: st.markdown("### 🔵 Team Blau"); st.components.v1.html(st.session_state.pitch_blau_html, height=460)
-        with c_p2: st.markdown("### 🟡 Team Gelb"); st.components.v1.html(st.session_state.pitch_gelb_html, height=460)
-    else: st.warning("Aufstellung muss berechnet werden.")
+        # Smarte positionsbasierte Verteilung der verbleibenden KI-Spieler auf die Ersatzbänke
+        übrige_ki = [c for c in ki_pool if c["name"] not in genutzte_namen]
+        bench_blau = [c for c in ersatz_blau_fest if c["name"] not in genutzte_namen]
+        bench_gelb = [c for c in ersatz_gelb_fest if c["name"] not in genutzte_namen]
+        
+        for c in übrige_ki:
+            p_haupt = c["positions"][0] if c["positions"] else "ZM"
+            
+            # Zähle, wie viele Spieler mit ähnlicher Position bereits auf der jeweiligen Bank sitzen
+            blau_matching = sum(1 for b in bench_blau if b["positions"] and (b["positions"][0] == p_haupt or sind_verwandt(b["positions"][0], p_haupt)))
+            gelb_matching = sum(1 for g in bench_gelb if g["positions"] and (g["positions"][0] == p_haupt or sind_verwandt(g["positions"][0], p_haupt)))
+            
+            # Weise den Spieler der Bank zu, die auf dieser Position noch dünner besetzt ist
+            if blau_matching < gelb_matching:
+                bench_blau.append(c)
+            elif gelb_matching < blau_matching:
+                bench_gelb.append(c)
+            else:
+                # Bei Gleichstand bekommt die insgesamt kürzere Bank den Zuschlag
+                if len(bench_blau) <= len(bench_gelb):
+                    bench_blau.append(c)
+                else:
+                    bench_gelb.append(c)
+
+        alle_kader_namen = [sp["name"] for sp in nur_spieler]
+        b_blau_list = [f'<div class="player" id="bBlau_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{kurzes_namensformat(x["name"], alle_kader_namen)}</span></div>' for i, x in enumerate(bench_blau)]
+        b_gelb_list = [f'<div class="player" id="bGelb_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{kurzes_namensformat(x["name"], alle_kader_namen)}</span></div>' for i, x in enumerate(bench_gelb)]
+        
+        st.session_state.duo_pitch_html = generiere_duo_pitch_html(
+            t_blau, "".join(b_blau_list), gewaehltes_layout_blau,
+            t_gelb, "".join(b_gelb_list), gewaehltes_layout_gelb
+        )
+
+    if "duo_pitch_html" in st.session_state:
+        st.info("💡 **Taktikboard aktiv:** Du kannst Spieler-Karten jetzt frei zwischen Startelf, Ersatzbänken und allen Teams hin- und herschieben!")
+        st.components.v1.html(st.session_state.duo_pitch_html, height=470)
+    else: 
+        st.warning("Aufstellung muss berechnet werden.")
 
 # --- TAB 7: SPIELERPLUS IMPORT (TRAINER ONLY) ---
 if selected_tab == "📥 Import (SpielerPlus)" and is_trainer:
