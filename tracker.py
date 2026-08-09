@@ -1583,7 +1583,7 @@ with st.sidebar:
                 "🔑 Gemini API Key (Manuelle Eingabe):", 
                 value=gemini_key if gemini_key else "", 
                 type="password", 
-                key="gemini_key_input"
+                key="gemini_key_input_neu"
             )
             if gemini_key_input:
                 gemini_key = gemini_key_input.strip()
