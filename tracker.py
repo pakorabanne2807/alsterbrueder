@@ -2968,7 +2968,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
     c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
     col_blau, col_gelb = st.columns(2)
     with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
-    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[3].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[4].text_input("Sp. 4", "0:0", key="g4")
+    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[2].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
     st.divider(); spiel_liste = []
     for p in nur_spieler:
         planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
