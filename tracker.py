@@ -11,12 +11,6 @@ import plotly.express as px
 import plotly.graph_objects as go
 import requests
 import streamlit as st
-# --- ENV-DATEI LADE-BEFEHL (ABGESICHERT) ---
-try:
-    from dotenv import load_dotenv
-    load_dotenv(override=True)
-except ImportError:
-    pass
 
 # --- KONFIGURATION & SETUP ---
 st.set_page_config(
@@ -152,14 +146,11 @@ PHASEN_NAMEN = [
     "Phase 5: Abschlussspiel"
 ]
 
-# --- SICHERE HOLUNG DER SENSIBLEN DATEN (SECRETS / ENV) ---
+# --- SICHERE HOLUNG DER SENSIBLEN DATEN (SECRETS) ---
 def get_secret_value(key_name, default_val=""):
-    try:
-        if key_name in st.secrets:
-            return str(st.secrets[key_name]).strip()
-    except Exception:
-        pass
-    return os.environ.get(key_name, default_val).strip()
+    if key_name in st.secrets:
+        return str(st.secrets[key_name]).strip()
+    return default_val
 
 API_URL = get_secret_value("API_URL", "")
 GEMINI_API_KEY = get_secret_value("GEMINI_API_KEY", "")
