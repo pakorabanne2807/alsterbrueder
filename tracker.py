@@ -1548,26 +1548,23 @@ if "zuweisungen" not in st.session_state: st.session_state.zuweisungen = {}
 
 nur_spieler = [p for p in st.session_state.data["players"] if p.get("role", "Spieler") == "Spieler"]
 
-qp_trainer = st.query_params.get("trainer") == "1"
-qp_player = st.query_params.get("player")
-qp_pin = st.query_params.get("pin")
-
 gemini_key = get_background_gemini_key()
 
 # --- SIDEBAR: PASSWORT-SCHUTZ & PERSISTENTER SPIELER LOGIN ---
 with st.sidebar:
     st.markdown("### 🔐 Trainer-Bereich")
-    default_pass = "fcalster" if qp_trainer else ""
+    # Streamlit merkt sich das Passwort sicher im Hintergrund über den "key" Parameter
     passwort_eingabe = st.text_input(
         "Trainer-Passwort für Schreibrechte:", 
         type="password",
-        value=default_pass,
         key="trainer_auth"
     )
-    is_trainer = (passwort_eingabe == "fcalster")
+    
+    # Das Trainer-Passwort wird jetzt sicher aus der secrets.toml geladen
+    richtiges_passwort = get_secret_value("TRAINER_PASSWORD", "fcalster")
+    is_trainer = (passwort_eingabe == richtiges_passwort)
     
     if is_trainer:
-        st.query_params["trainer"] = "1"
         st.success("👨‍🍳 Trainer-Modus aktiv")
         with st.expander("⚙️ Erweitere API-Einstellungen", expanded=False):
             gemini_key_input = st.text_input(
@@ -1599,8 +1596,7 @@ with st.sidebar:
             else:
                 st.info("⚪ Kein Key hinterlegt")
     else:
-        if "trainer" in st.query_params: del st.query_params["trainer"]
-        st.info("👪 Eltern-Modus active")
+        st.info("👪 Eltern-Modus aktiv")
         
     st.markdown("---")
     st.markdown("### 🏃‍♂️ Spieler-Login")
@@ -1608,16 +1604,15 @@ with st.sidebar:
     logged_in_player = None
     if nur_spieler:
         spieler_namen_liste = ["-- Bitte wählen --"] + sorted([sp["name"] for sp in nur_spieler])
-        default_idx = spieler_namen_liste.index(qp_player) if qp_player in spieler_namen_liste else 0
-        gewaehlter_spieler_login = st.selectbox("Wer bist du?", spieler_namen_liste, index=default_idx, key="player_select_login")
-        eingabe_pin = st.text_input("Deine 4-stellige PIN:", type="password", value=qp_pin if qp_pin else "", key="player_pin_login")
+        
+        # Sicherer Login: Streamlit's "key" Parameter hält den Spieler in der internen Session
+        gewaehlter_spieler_login = st.selectbox("Wer bist du?", spieler_namen_liste, key="player_select_login")
+        eingabe_pin = st.text_input("Deine 4-stellige PIN:", type="password", key="player_pin_login")
         
         if gewaehlter_spieler_login != "-- Bitte wählen --" and eingabe_pin:
             target_p = next((x for x in nur_spieler if x["name"] == gewaehlter_spieler_login), None)
             if target_p and target_p.get("pin") == eingabe_pin.strip():
                 logged_in_player = target_p
-                st.query_params["player"] = gewaehlter_spieler_login
-                st.query_params["pin"] = eingabe_pin.strip()
                 st.success(f"Hi {gewaehlter_spieler_login}! 👋")
             elif target_p and not target_p.get("pin"):
                 st.warning("Für dich wurde noch keine PIN hinterlegt. Frage deinen Trainer!")
