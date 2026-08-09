@@ -2896,101 +2896,174 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
     with tab_tr_log:
         st.markdown("#### 🏃‍♂️ Trainingseinheit protokollieren")
         
-        c_tr1, c_tr2 = st.columns([1, 2])
-        tr_datum = c_tr1.date_input("Datum der Einheit:", datetime.today(), key="tr_log_datum")
-        tr_typ = c_tr2.selectbox("Event-Typ:", ["Training", "Zusatztraining", "Hallentraining"], key="tr_log_typ")
-        
-        tr_kommentar = st.text_area("📝 Trainings-Notizen / Durchgeführte Übungen:", placeholder="z. B. Schwerpunkt Gegenpressing. Passübung im Viertelfeld lief super, im Rondo noch zu viele Ballverluste.", key="tr_log_kommentar")
-        
-        st.divider()
-        st.markdown("#### 👥 Anwesenheit & 📸 Siegerfoto-Check")
-        st.caption("Hak an, wer da war – und wähle die Jungs aus, die das Abschlussspiel gewonnen haben!")
-        
-        tr_spieler_daten = []
+        # 1. Alle Datums-Einträge sammeln, die aus SpielerPlus-Imports stammen (Event-Type: "training")
+        alle_tr_daten = set()
         for p in nur_spieler:
-            tr_spieler_daten.append({
-                "ID": str(p["id"]),
-                "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None,
-                "Name": p["name"],
-                "Anwesend ⚽": True,
-                "🏆 Siegerfoto-Team": False
-            })
-            
-        df_tr_log = pd.DataFrame(tr_spieler_daten)
-        if not df_tr_log.empty:
-            df_tr_log = df_tr_log.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
-            
-        editiertes_tr_log = st.data_editor(
-            df_tr_log,
-            hide_index=True,
-            disabled=["ID", "Nr.", "Name"],
-            column_config={
-                "ID": None,
-                "Nr.": st.column_config.NumberColumn("Nr.", format="%d"),
-                "Anwesend ⚽": st.column_config.CheckboxColumn("Anwesend ⚽"),
-                "🏆 Siegerfoto-Team": st.column_config.CheckboxColumn("🏆 Siegerfoto?")
-            },
-            use_container_width=True
-        )
+            for t in p.get("training", []):
+                t_type = str(t.get("type", "")).strip().lower()
+                if t_type == "training" and t.get("date"):
+                    alle_tr_daten.add(t.get("date"))
+                    
+        sortierte_tr_daten = sorted(list(alle_tr_daten), reverse=True)
         
-        if st.button("💾 Trainingseinheit speichern", type="primary", key="save_tr_log_btn"):
-            p_d_str = str(tr_datum)
-            p_y_str = str(tr_typ)
+        c_mode, c_sel = st.columns([1, 2])
+        log_modus = c_mode.radio("Modus:", ["📅 Aus SpielerPlus-Import wählen", "➕ Manuelles Datum"], horizontal=True, key="tr_log_mode")
+        
+        selected_tr_date_str = ""
+        
+        if log_modus == "📅 Aus SpielerPlus-Import wählen":
+            if sortierte_tr_daten:
+                selected_tr_date_str = c_sel.selectbox("Wähle ein Training aus deinem SpielerPlus-Import:", sortierte_tr_daten, key="tr_log_sp_select")
+            else:
+                c_sel.info("Noch keine Trainings aus SpielerPlus importiert. Importiere zuerst eine Datei in Tab '📥 Import' oder nutze den manuellen Modus.")
+        else:
+            manual_date = c_sel.date_input("Datum der Einheit:", datetime.today(), key="tr_log_manual_date")
+            selected_tr_date_str = str(manual_date)
             
-            for index, row in editiertes_tr_log.iterrows():
-                sp = next((x for x in st.session_state.data["players"] if str(x["id"]) == str(row["ID"])), None)
-                if sp:
-                    if "training" not in sp: sp["training"] = []
+        if selected_tr_date_str:
+            # Notiz/Kommentar aus einem bestehenden Eintrag herauskratzen
+            bisherige_notiz = ""
+            for p in nur_spieler:
+                eintrag = next((t for t in p.get("training", []) if t.get("date") == selected_tr_date_str), None)
+                if eintrag and eintrag.get("note"):
+                    bisherige_notiz = eintrag.get("note")
+                    break
                     
-                    is_anw = bool(row["Anwesend ⚽"])
-                    is_winner = bool(row["🏆 Siegerfoto-Team"])
+            tr_kommentar = st.text_area("📝 Trainings-Notizen / Durchgeführte Übungen:", value=bisherige_notiz, placeholder="z. B. Schwerpunkt Gegenpressing. Passübung im Viertelfeld lief super, im Rondo noch zu viele Ballverluste.", key="tr_log_kommentar")
+            
+            st.divider()
+            st.markdown(f"#### 👥 Anwesenheit am {selected_tr_date_str} & 📸 Siegerfoto-Check")
+            
+            tr_spieler_daten = []
+            
+            if log_modus == "📅 Aus SpielerPlus-Import wählen":
+                st.caption("Die Anwesenheit basiert auf deinem SpielerPlus-Import. Hak einfach an, wer das Abschlussspiel gewonnen hat!")
+                for p in nur_spieler:
+                    tr_history = p.get("training", [])
+                    sp_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str), None)
                     
-                    # Training eintragen oder aktualisieren
-                    bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == p_d_str and t.get("type") == p_y_str), None)
-                    if bestehender_eintrag:
-                        bestehender_eintrag["present"] = is_anw
-                        bestehender_eintrag["note"] = tr_kommentar.strip()
-                    else:
-                        sp["training"].append({"date": p_d_str, "type": p_y_str, "present": is_anw, "note": tr_kommentar.strip()})
+                    war_anwesend = sp_eintrag["present"] if sp_eintrag else False
+                    status_txt = "✅ Anwesend" if war_anwesend else ("❌ Abwesend" if sp_eintrag else "❓ Keine Daten")
+
+                    tr_spieler_daten.append({
+                        "ID": str(p["id"]),
+                        "Name": p["name"],
+                        "Anwesenheit Status": status_txt,
+                        "🏆 Siegerfoto-Team": False
+                    })
+                    
+                df_tr_log = pd.DataFrame(tr_spieler_daten)
+                if not df_tr_log.empty:
+                    df_tr_log = df_tr_log.sort_values(by="Name").reset_index(drop=True)
+                    
+                editiertes_tr_log = st.data_editor(
+                    df_tr_log,
+                    hide_index=True,
+                    disabled=["ID", "Name", "Anwesenheit Status"],
+                    column_config={
+                        "ID": None,
+                        "Name": st.column_config.TextColumn("Spielername"),
+                        "Anwesenheit Status": st.column_config.TextColumn("Anwesenheit (SpielerPlus)"),
+                        "🏆 Siegerfoto-Team": st.column_config.CheckboxColumn("🏆 Siegerfoto?")
+                    },
+                    use_container_width=True
+                )
+            else:
+                st.caption("Manuelles Training: Hak an, wer beim Training anwesend war und wer das Abschlussspiel gewonnen hat!")
+                for p in nur_spieler:
+                    # Prüfen, ob für das manuelle Datum bereits Daten existieren
+                    tr_history = p.get("training", [])
+                    ex_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str), None)
+                    is_anw_init = ex_eintrag["present"] if ex_eintrag else True
+
+                    tr_spieler_daten.append({
+                        "ID": str(p["id"]),
+                        "Name": p["name"],
+                        "Anwesend ⚽": is_anw_init,
+                        "🏆 Siegerfoto-Team": False
+                    })
+                    
+                df_tr_log = pd.DataFrame(tr_spieler_daten)
+                if not df_tr_log.empty:
+                    df_tr_log = df_tr_log.sort_values(by="Name").reset_index(drop=True)
+                    
+                editiertes_tr_log = st.data_editor(
+                    df_tr_log,
+                    hide_index=True,
+                    disabled=["ID", "Name"],
+                    column_config={
+                        "ID": None,
+                        "Name": st.column_config.TextColumn("Spielername"),
+                        "Anwesend ⚽": st.column_config.CheckboxColumn("Anwesend ⚽"),
+                        "🏆 Siegerfoto-Team": st.column_config.CheckboxColumn("🏆 Siegerfoto?")
+                    },
+                    use_container_width=True
+                )
+            
+            if st.button("💾 Trainingseinheit speichern", type="primary", key="save_tr_log_btn"):
+                for index, row in editiertes_tr_log.iterrows():
+                    sp = next((x for x in st.session_state.data["players"] if str(x["id"]) == str(row["ID"])), None)
+                    if sp:
+                        if "training" not in sp:
+                            sp["training"] = []
                         
-                    # Siegerfoto-Zähler anpassen
-                    if is_winner:
-                        sp["winner_pics_count"] = sp.get("winner_pics_count", 0) + 1
-                        sp["points"] = sp.get("points", 0) + 15  # +15 EP für das Siegerfoto
+                        is_winner = bool(row["🏆 Siegerfoto-Team"])
                         
-            speichere_daten(st.session_state.data)
-            st.balloons()
-            st.success("🎉 Trainingseinheit & Siegerfoto-Punkte erfolgreich gespeichert!")
-            st.rerun()
+                        if log_modus == "📅 Aus SpielerPlus-Import wählen":
+                            # Nur Notiz ergänzen, Anwesenheit stammt aus Import
+                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str), None)
+                            if bestehender_eintrag:
+                                bestehender_eintrag["note"] = tr_kommentar.strip()
+                            else:
+                                sp["training"].append({"date": selected_tr_date_str, "type": "training", "present": False, "note": tr_kommentar.strip()})
+                        else:
+                            # Manuelles Training: Anwesenheit direkt speichern
+                            is_anw = bool(row["Anwesend ⚽"])
+                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str), None)
+                            if bestehender_eintrag:
+                                bestehender_eintrag["present"] = is_anw
+                                bestehender_eintrag["note"] = tr_kommentar.strip()
+                            else:
+                                sp["training"].append({"date": selected_tr_date_str, "type": "training", "present": is_anw, "note": tr_kommentar.strip()})
+                            
+                        # Siegerfoto-Zähler anpassen
+                        if is_winner:
+                            sp["winner_pics_count"] = sp.get("winner_pics_count", 0) + 1
+                            sp["points"] = sp.get("points", 0) + 15  # +15 EP für das Siegerfoto
+                            
+                speichere_daten(st.session_state.data)
+                st.balloons()
+                st.success(f"🎉 Trainings-Notizen & Daten für den {selected_tr_date_str} erfolgreich gespeichert!")
+                st.rerun()
 
     with tab_match_log:
         st.markdown("#### ⚽ Spieltag Statistiken loggen")
-    c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
-    col_blau, col_gelb = st.columns(2)
-    with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
-    with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[2].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
-    st.divider(); spiel_liste = []
-    for p in nur_spieler:
-        planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
-        default_status = "❌ Nicht in Kader" if planung == "❌ Abwesend" else ("🔵 Team Blau" if planung == "🤖 KI entscheidet" else planung)
-        spiel_liste.append({"ID": str(p["id"]), "Nr.": int(p["number"]) if str(p["number"]).isdigit() else None, "Name": p["name"], "Team / Status": default_status, "⚽ Tore": 0, "Vorlagen": 0})
-    spiel_df = pd.DataFrame(spiel_liste)
-    if not spiel_df.empty: spiel_df = spiel_df.sort_values(by="Nr.", na_position="last").reset_index(drop=True)
-    editiertes_spiel = st.data_editor(spiel_df, disabled=["ID", "Nr.", "Name"], hide_index=True, column_config={"ID": None, "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), "Team / Status": st.column_config.SelectboxColumn(options=["🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Nicht im Kader"], required=True), "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")}, use_container_width=True)
-    if st.button("Spieltag speichern", type="primary"):
-        if not m_opponent.strip(): st.error("Gegner fehlt!")
-        else:
-            r_blau = [m_b1.strip() or "-", m_b2.strip() or "-", m_b3.strip() or "-", m_b4.strip() or "-"]
-            r_gelb = [m_g1.strip() or "-", m_g2.strip() or "-", m_g3.strip() or "-", m_g4.strip() or "-"]
-            for index, row in editiertes_spiel.iterrows():
-                spieler = next(p for p in st.session_state.data["players"] if str(p["id"]) == str(row["ID"]))
-                if "matches" not in spieler: spieler["matches"] = []
-                status = row["Team / Status"]
-                db_team = "Blau" if status == "🔵 Team Blau" else ("Gelb" if status == "🟡 Team Gelb" else ("Ersatz" if status == "🔄 Ersatzbank" else "Abwesend"))
-                act = db_team in ["Blau", "Gelb", "Ersatz"]
-                spieler["matches"].append({"date": str(m_datum), "opponent": m_opponent.strip(), "type": m_type, "team_blau_results": r_blau, "team_gelb_results": r_gelb, "played": act, "team": db_team, "goals": int(row["⚽ Tore"]) if act else 0, "assists": int(row["Vorlagen"]) if act else 0})
-            speichere_daten(st.session_state.data)
-            st.success("Spieltag erfolgreich archiviert!")
+        c_meta1, c_meta2, c_meta3 = st.columns(3); m_datum = c_meta1.date_input("Datum Spiel", datetime.today()); m_type = c_meta2.selectbox("Spielart", ["Ligaspiel", "Testspiel"]); m_opponent = c_meta3.text_input("Gegner", placeholder="z.B. VfL Hamburg")
+        col_blau, col_gelb = st.columns(2)
+        with col_blau: st.markdown("<b>🔵 Team Blau Ergebnisse</b>", unsafe_allow_html=True); sub_b = st.columns(4); m_b1 = sub_b[0].text_input("Sp. 1", "0:0", key="b1"); m_b2 = sub_b[1].text_input("Sp. 2", "0:0", key="b2"); m_b3 = sub_b[2].text_input("Sp. 3", "0:0", key="b3"); m_b4 = sub_b[3].text_input("Sp. 4", "0:0", key="b4")
+        with col_gelb: st.markdown("<b>🟡 Team Gelb Ergebnisse</b>", unsafe_allow_html=True); sub_g = st.columns(4); m_g1 = sub_g[0].text_input("Sp. 1", "0:0", key="g1"); m_g2 = sub_g[1].text_input("Sp. 2", "0:0", key="g2"); m_g3 = sub_g[2].text_input("Sp. 3", "0:0", key="g3"); m_g4 = sub_g[3].text_input("Sp. 4", "0:0", key="g4")
+        st.divider(); spiel_liste = []
+        for p in nur_spieler:
+            planung = st.session_state.zuweisungen.get(str(p["id"]), "🤖 KI entscheidet")
+            default_status = "❌ Nicht in Kader" if planung == "❌ Abwesend" else ("🔵 Team Blau" if planung == "🤖 KI entscheidet" else planung)
+            spiel_liste.append({"ID": str(p["id"]), "Name": p["name"], "Team / Status": default_status, "⚽ Tore": 0, "Vorlagen": 0})
+        spiel_df = pd.DataFrame(spiel_liste)
+        if not spiel_df.empty: spiel_df = spiel_df.sort_values(by="Name").reset_index(drop=True)
+        editiertes_spiel = st.data_editor(spiel_df, disabled=["ID", "Name"], hide_index=True, column_config={"ID": None, "Team / Status": st.column_config.SelectboxColumn(options=["🔵 Team Blau", "🟡 Team Gelb", "🔄 Ersatzbank", "❌ Nicht im Kader"], required=True), "⚽ Tore": st.column_config.NumberColumn(min_value=0, format="%d"), "Vorlagen": st.column_config.NumberColumn(min_value=0, format="%d")}, use_container_width=True)
+        if st.button("Spieltag speichern", type="primary"):
+            if not m_opponent.strip(): st.error("Gegner fehlt!")
+            else:
+                r_blau = [m_b1.strip() or "-", m_b2.strip() or "-", m_b3.strip() or "-", m_b4.strip() or "-"]
+                r_gelb = [m_g1.strip() or "-", m_g2.strip() or "-", m_g3.strip() or "-", m_g4.strip() or "-"]
+                for index, row in editiertes_spiel.iterrows():
+                    spieler = next(p for p in st.session_state.data["players"] if str(p["id"]) == str(row["ID"]))
+                    if "matches" not in spieler: spieler["matches"] = []
+                    status = row["Team / Status"]
+                    db_team = "Blau" if status == "🔵 Team Blau" else ("Gelb" if status == "🟡 Team Gelb" else ("Ersatz" if status == "🔄 Ersatzbank" else "Abwesend"))
+                    act = db_team in ["Blau", "Gelb", "Ersatz"]
+                    spieler["matches"].append({"date": str(m_datum), "opponent": m_opponent.strip(), "type": m_type, "team_blau_results": r_blau, "team_gelb_results": r_gelb, "played": act, "team": db_team, "goals": int(row["⚽ Tore"]) if act else 0, "assists": int(row["Vorlagen"]) if act else 0})
+                speichere_daten(st.session_state.data)
+                st.success("Spieltag erfolgreich archiviert!")
 
 # --- TAB 6: KI TWIN-TEAMS + VOLLSTÄNDIGE ALGORITHMIK ---
 if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
