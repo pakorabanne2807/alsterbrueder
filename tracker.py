@@ -621,12 +621,18 @@ def render_html5_taktikboard():
             const currentTemplate = document.getElementById('templateSelect').value;
             const exportData = [...shapes, { type: 'meta', template: currentTemplate }];
             const dataStr = JSON.stringify(exportData);
-            prompt("Kopiere diesen Taktik-Code (Strg+C) und füge ihn in das Textfeld deiner Übung ein:", dataStr);
-            statusBar.innerText = "✅ Taktik-Code bereitgestellt!";
+            
+            navigator.clipboard.writeText(dataStr).then(() => {
+                alert("✅ Code erfolgreich kopiert! Du kannst ihn jetzt mit Strg+V einfügen.");
+                statusBar.innerText = "✅ Taktik-Code in Zwischenablage kopiert!";
+            }).catch(err => {
+                // Fallback, falls der Browser den direkten Zugriff blockiert
+                prompt("Dein Browser blockiert das automatische Kopieren. Kopiere den Code hier (Strg+C):", dataStr);
+            });
         }
 
         function importShapes() {
-            const dataStr = prompt("Füge hier deinen Taktik-Code ein:");
+            const dataStr = prompt("Füge hier deinen Taktik-Code ein (Strg+V):");
             if (dataStr) {
                 try {
                     const parsed = JSON.parse(dataStr);
@@ -660,8 +666,13 @@ def render_html5_taktikboard():
             const currentTemplate = document.getElementById('templateSelect').value;
             const exportData = [...shapes, { type: 'meta', template: currentTemplate }];
             const dataStr = JSON.stringify(exportData);
-            prompt("📋 Kopiere diesen Taktik-Code (Strg+C) und füge ihn unten im Zuordnungs-Formular ein:", dataStr);
-            statusBar.innerText = "⚽ Taktik-Code in die Zwischenablage kopiert!";
+            
+            navigator.clipboard.writeText(dataStr).then(() => {
+                alert("⚽ Code kopiert! Scrolle jetzt nach unten und füge ihn bei der Übung ein.");
+                statusBar.innerText = "⚽ Taktik-Code in die Zwischenablage kopiert!";
+            }).catch(err => {
+                prompt("📋 Kopiere diesen Taktik-Code (Strg+C) und füge ihn unten im Zuordnungs-Formular ein:", dataStr);
+            });
         }
 
         function onDragStart(e, type, subtypeOrColor, overrideColor = null) {
@@ -978,17 +989,55 @@ def render_html5_taktikboard():
         function undoLast() { curveStep = 0; if (history.length > 0) { redoHistory.push(JSON.parse(JSON.stringify(shapes))); shapes = history.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
         function redoLast() { curveStep = 0; if (redoHistory.length > 0) { history.push(JSON.parse(JSON.stringify(shapes))); shapes = redoHistory.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
         function clearDrawings() { curveStep = 0; shapes = []; history = []; redoHistory = []; selectedShapes = []; drawCtx.clearRect(0, 0, 550, 380); updateStatus(); }
-        function getPos(e) { const rect = drawCanvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
+        function getPos(e) { 
+            const rect = drawCanvas.getBoundingClientRect(); 
+            const scaleX = drawCanvas.width / rect.width;
+            const scaleY = drawCanvas.height / rect.height;
+            return { 
+                x: Math.round((e.clientX - rect.left) * scaleX), 
+                y: Math.round((e.clientY - rect.top) * scaleY) 
+            }; 
+        }
 
         // Hilfsfunktion für Touch-Koordinaten auf dem Smartphone
         function getTouchPos(e) {
             const rect = drawCanvas.getBoundingClientRect();
+            const scaleX = drawCanvas.width / rect.width;
+            const scaleY = drawCanvas.height / rect.height;
             const touch = e.touches[0] || e.changedTouches[0];
             return {
-                x: touch.clientX - rect.left,
-                y: touch.clientY - rect.top
+                x: Math.round((touch.clientX - rect.left) * scaleX),
+                y: Math.round((touch.clientY - rect.top) * scaleY)
             };
         }
+
+        // Vollbild-Steuerung und visuelle Anpassung
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                document.documentElement.requestFullscreen().catch(err => {
+                    alert("Vollbild wird von deinem Browser auf diesem Gerät leider nicht unterstützt.");
+                });
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                }
+            }
+        }
+        
+        document.addEventListener("fullscreenchange", function() {
+            const container = document.getElementById('board-container');
+            if (document.fullscreenElement) {
+                // Skaliert das Spielfeld proportional auf die volle Bildschirmgröße hoch
+                const scale = Math.min(window.innerWidth / 570, (window.innerHeight - 100) / 400);
+                container.style.transform = `scale(${scale})`;
+                container.style.transformOrigin = 'top center';
+                container.style.margin = '20px auto 0 auto';
+            } else {
+                // Setzt das Feld beim Verlassen wieder exakt in die Ursprungsform zurück
+                container.style.transform = 'none';
+                container.style.margin = '0';
+            }
+        });
 
         function getHitHandle(pos) {
             // Auf Touch-Geräten nutzen wir deutlich größere Radien (30px / 35px) zum "Anfassen"
