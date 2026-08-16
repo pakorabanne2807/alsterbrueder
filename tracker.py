@@ -141,7 +141,10 @@ def render_taktik_viewer(json_str, height=390):
                     for (let i = 0; i < lines.length; i++) {{ drawCtx.fillText(lines[i], s.x - 10, s.y + 5 + (i * 18)); }}
                     drawCtx.shadowBlur = 0;
                 }} else if (s.type === 'utensil') {{
-                    if (s.uType === 'cone') {{
+                    if (s.uType === 'ball') {{
+                        drawCtx.fillStyle = "#ffffff"; drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 6, 0, Math.PI * 2); drawCtx.fill();
+                        drawCtx.strokeStyle = "#000000"; drawCtx.lineWidth = 2; drawCtx.stroke();
+                    }} else if (s.uType === 'cone') {{
                         drawCtx.fillStyle = "#ea580c"; drawCtx.beginPath();
                         drawCtx.moveTo(s.x, s.y - 10); drawCtx.lineTo(s.x + 10, s.y + 10); drawCtx.lineTo(s.x - 10, s.y + 10); drawCtx.fill();
                     }} else if (s.uType === 'pole') {{
@@ -263,8 +266,9 @@ def json_zu_svg(json_str):
                     svg += f'<text x="{x-10}" y="{y+10+(i*18)}" font-family="Arial" font-weight="bold" font-size="15px" fill="#000000">{l}</text>'
             elif t == "utensil":
                 u, x, y = s.get("uType"), s.get("x", 0), s.get("y", 0)
-                if u == "cone": svg += f'<polygon points="{x},{y-10} {x+10},{y+10} {x-10},{y+10}" fill="#ea580c" />'
-                elif u == "pole": 
+                if u == "ball": svg += f'<circle cx="{x}" cy="{y}" r="6" fill="#ffffff" stroke="#000000" stroke-width="2" />'
+                elif u == "cone": svg += f'<polygon points="{x},{y-10} {x+10},{y+10} {x-10},{y+10}" fill="#ea580c" />'
+                elif u == "pole":
                     svg += f'<line x1="{x}" y1="{y-12}" x2="{x}" y2="{y+12}" stroke="#facc15" stroke-width="4" />'
                     svg += f'<circle cx="{x}" cy="{y+12}" r="4" fill="#000000" />'
                 elif u == "minigoal": svg += f'<rect x="{x-20}" y="{y-5}" width="40" height="10" fill="none" stroke="#ffffff" stroke-width="4" />'
@@ -495,6 +499,7 @@ def render_html5_taktikboard():
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#facc15')" onclick="selectItemMobile(this, 'dot', '#facc15')" title="Spieler Gelb">🟡</div>
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#ef4444')" onclick="selectItemMobile(this, 'dot', '#ef4444')" title="Spieler Rot">🔴</div>
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'dot', '#000000')" onclick="selectItemMobile(this, 'dot', '#000000')" title="Torwart">⚫</div>
+        <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'ball', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'ball', '#ffffff')" title="Ball">⚽</div>
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'cone', '#ea580c')" onclick="selectItemMobile(this, 'utensil', 'cone', '#ea580c')" title="Hütchen">🔺</div>
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'pole', '#facc15')" onclick="selectItemMobile(this, 'utensil', 'pole', '#facc15')" title="Stange">📍</div>
         <div class="drag-item" draggable="true" ondragstart="onDragStart(event, 'utensil', 'minigoal', '#ffffff')" onclick="selectItemMobile(this, 'utensil', 'minigoal', '#ffffff')" title="Minitor (H)">🥅</div>
@@ -922,7 +927,10 @@ def render_html5_taktikboard():
                     }
                     drawCtx.shadowBlur = 0;
                 } else if (s.type === 'utensil') {
-                    if (s.uType === 'cone') {
+                    if (s.uType === 'ball') {
+                        drawCtx.fillStyle = "#ffffff"; drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 6, 0, Math.PI * 2); drawCtx.fill();
+                        drawCtx.strokeStyle = "#000000"; drawCtx.lineWidth = 2; drawCtx.stroke();
+                    } else if (s.uType === 'cone') {
                         drawCtx.fillStyle = "#ea580c"; drawCtx.beginPath();
                         drawCtx.moveTo(s.x, s.y - 10); drawCtx.lineTo(s.x + 10, s.y + 10); drawCtx.lineTo(s.x - 10, s.y + 10); drawCtx.fill();
                     } else if (s.uType === 'pole') {
