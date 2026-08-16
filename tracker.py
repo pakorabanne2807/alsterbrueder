@@ -42,6 +42,238 @@ def render_svg_responsive(svg_code, height=340):
     """
     st.components.v1.html(html_wrapper, height=height, scrolling=False)
 
+# --- VIEWER FÜR EIGENE TAKTIK-SKIZZEN (JSON) ---
+def render_taktik_viewer(json_str, height=390):
+    html_code = f"""
+    <!DOCTYPE html>
+    <html>
+    <head>
+    <style>
+        body {{ margin: 0; padding: 0; display: flex; justify-content: center; align-items: flex-start; background: transparent; overflow: hidden; width: 100vw; height: 100vh; }}
+        #board-wrapper {{ width: 100%; display: flex; justify-content: center; transform-origin: top center; }}
+        #board-container {{ position: relative; width: 550px; height: 380px; transform-origin: top center; }}
+        canvas {{ position: absolute; top: 0; left: 0; }}
+    </style>
+    </head>
+    <body>
+    <script type="application/json" id="taktik-data">{json_str}</script>
+    <div id="board-wrapper">
+        <div id="board-container">
+            <canvas id="pitchCanvas" width="550" height="380"></canvas>
+            <canvas id="drawCanvas" width="550" height="380"></canvas>
+        </div>
+    </div>
+    <script>
+        const pitchCtx = document.getElementById('pitchCanvas').getContext('2d');
+        const drawCtx = document.getElementById('drawCanvas').getContext('2d');
+        let shapes = [];
+        let template = "Plain";
+        
+        try {{
+            const dataStr = document.getElementById('taktik-data').textContent;
+            const rawData = JSON.parse(dataStr);
+            if (Array.isArray(rawData)) {{
+                const metaObj = rawData.find(s => s.type === 'meta');
+                if (metaObj && metaObj.template) template = metaObj.template;
+                shapes = rawData.filter(s => s.type !== 'meta');
+            }}
+        }} catch(e) {{
+            console.error("Fehler beim Parsen der Taktik-Daten:", e);
+        }}
+
+        function drawPitch() {{
+            const type = template;
+            const w = 550, h = 380;
+            pitchCtx.fillStyle = "#2e7d32"; pitchCtx.fillRect(0, 0, w, h);
+            pitchCtx.fillStyle = "#388e3c";
+            for(let i=0; i<w; i+=50) {{ if((i/50)%2 === 0) pitchCtx.fillRect(i, 0, 50, h); }}
+            pitchCtx.strokeStyle = "#ffffff"; pitchCtx.lineWidth = 3;
+
+            if(type === "EinTor") {{
+                const goalLineY = 350, penaltyBoxTopY = 200, penaltySpotY = 270, centerX = 275;
+                pitchCtx.strokeRect(30, 30, w-60, h-60); pitchCtx.strokeRect(100, penaltyBoxTopY, 350, 150); pitchCtx.strokeRect(180, 290, 190, 60);
+                pitchCtx.fillStyle = "#e2e8f0"; pitchCtx.fillRect(215, goalLineY, 120, 16); pitchCtx.strokeRect(215, goalLineY, 120, 16);
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, 4, 0, Math.PI*2); pitchCtx.fill();
+                const arcRadius = 85; const yDist = penaltySpotY - penaltyBoxTopY; const intersectAngle = Math.asin(yDist / arcRadius);
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, penaltySpotY, arcRadius, Math.PI + intersectAngle, Math.PI * 2 - intersectAngle); pitchCtx.stroke();
+            }} else if (type === "ZweiTore") {{
+                const centerX = 275; pitchCtx.strokeRect(30, 30, w-60, h-60);
+                pitchCtx.beginPath(); pitchCtx.moveTo(30, h/2); pitchCtx.lineTo(w-30, h/2); pitchCtx.stroke();
+                pitchCtx.beginPath(); pitchCtx.arc(centerX, h/2, 50, 0, Math.PI*2); pitchCtx.stroke();
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, h/2, 4, 0, Math.PI*2); pitchCtx.fill();
+                pitchCtx.strokeRect(100, 270, 350, 80); pitchCtx.strokeRect(180, 320, 190, 30);
+                pitchCtx.fillStyle = "#e2e8f0"; pitchCtx.fillRect(215, 350, 120, 16); pitchCtx.strokeRect(215, 350, 120, 16);
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, 290, 4, 0, Math.PI*2); pitchCtx.fill();
+                pitchCtx.strokeRect(100, 30, 350, 80); pitchCtx.strokeRect(180, 30, 190, 30);
+                pitchCtx.fillStyle = "#e2e8f0"; pitchCtx.fillRect(215, 14, 120, 16); pitchCtx.strokeRect(215, 14, 120, 16);
+                pitchCtx.fillStyle = "#ffffff"; pitchCtx.beginPath(); pitchCtx.arc(centerX, 90, 4, 0, Math.PI*2); pitchCtx.fill();
+            }} else {{
+                pitchCtx.strokeRect(30, 30, w-60, h-60);
+            }}
+        }}
+
+        function drawArrowHead(ctx, fromX, fromY, toX, toY, color) {{
+            const headlen = 13; const dx = toX - fromX; const dy = toY - fromY; const angle = Math.atan2(dy, dx);
+            ctx.fillStyle = color; ctx.beginPath();
+            ctx.moveTo(toX, toY);
+            ctx.lineTo(toX - headlen * Math.cos(angle - Math.PI / 6), toY - headlen * Math.sin(angle - Math.PI / 6));
+            ctx.lineTo(toX - headlen * Math.cos(angle + Math.PI / 6), toY - headlen * Math.sin(angle + Math.PI / 6));
+            ctx.closePath(); ctx.fill();
+        }}
+
+        function redrawAll() {{
+            drawCtx.clearRect(0, 0, 550, 380);
+            shapes.forEach(s => {{
+                drawCtx.strokeStyle = s.color || "#ffffff"; drawCtx.fillStyle = s.color || "#ffffff";
+                if (s.type === 'dot') {{
+                    drawCtx.beginPath(); drawCtx.arc(s.x, s.y, 11, 0, Math.PI * 2); drawCtx.fill();
+                    drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 2; drawCtx.stroke();
+                }} else if (s.type === 'line' || s.type === 'dashed') {{
+                    drawCtx.lineWidth = 4; drawCtx.setLineDash(s.type === 'dashed' ? [8, 6] : []);
+                    drawCtx.beginPath(); drawCtx.moveTo(s.x1, s.y1); drawCtx.lineTo(s.x2, s.y2); drawCtx.stroke();
+                    drawCtx.setLineDash([]); drawArrowHead(drawCtx, s.x1, s.y1, s.x2, s.y2, s.color);
+                }} else if (s.type === 'curve') {{
+                    drawCtx.lineWidth = 4; drawCtx.beginPath(); drawCtx.moveTo(s.x0, s.y0);
+                    drawCtx.quadraticCurveTo(s.cx, s.cy, s.x2, s.y2); drawCtx.stroke(); drawArrowHead(drawCtx, s.cx, s.cy, s.x2, s.y2, s.color);
+                }} else if (s.type === 'text') {{
+                    drawCtx.font = "bold 15px Arial"; drawCtx.shadowColor = "rgba(255,255,255,0.7)"; drawCtx.shadowBlur = 4;
+                    const lines = (s.text || "").split('\\n');
+                    for (let i = 0; i < lines.length; i++) {{ drawCtx.fillText(lines[i], s.x - 10, s.y + 5 + (i * 18)); }}
+                    drawCtx.shadowBlur = 0;
+                }} else if (s.type === 'utensil') {{
+                    if (s.uType === 'cone') {{
+                        drawCtx.fillStyle = "#ea580c"; drawCtx.beginPath();
+                        drawCtx.moveTo(s.x, s.y - 10); drawCtx.lineTo(s.x + 10, s.y + 10); drawCtx.lineTo(s.x - 10, s.y + 10); drawCtx.fill();
+                    }} else if (s.uType === 'pole') {{
+                        drawCtx.strokeStyle = "#facc15"; drawCtx.lineWidth = 4;
+                        drawCtx.beginPath(); drawCtx.moveTo(s.x, s.y + 12); drawCtx.lineTo(s.x, s.y - 12); drawCtx.stroke();
+                        drawCtx.fillStyle = "#000"; drawCtx.beginPath(); drawCtx.arc(s.x, s.y + 12, 4, 0, Math.PI*2); drawCtx.fill();
+                    }} else if (s.uType === 'minigoal') {{
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 4; drawCtx.strokeRect(s.x - 20, s.y - 5, 40, 10);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1; drawCtx.beginPath();
+                        for(let i=-15; i<=15; i+=5) {{ drawCtx.moveTo(s.x + i, s.y - 5); drawCtx.lineTo(s.x + i, s.y + 5); }} drawCtx.stroke();
+                    }} else if (s.uType === 'minigoal_v') {{
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 4; drawCtx.strokeRect(s.x - 5, s.y - 20, 10, 40);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1; drawCtx.beginPath();
+                        for(let i=-15; i<=15; i+=5) {{ drawCtx.moveTo(s.x - 5, s.y + i); drawCtx.lineTo(s.x + 5, s.y + i); }} drawCtx.stroke();
+                    }} else if (s.uType === 'largegoal') {{
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 5; drawCtx.strokeRect(s.x - 45, s.y - 10, 90, 20);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1.5; drawCtx.beginPath();
+                        for(let i=-40; i<=40; i+=8) {{ drawCtx.moveTo(s.x + i, s.y - 10); drawCtx.lineTo(s.x + i, s.y + 10); }}
+                        for(let j=-5; j<=5; j+=5) {{ drawCtx.moveTo(s.x - 45, s.y + j); drawCtx.lineTo(s.x + 45, s.y + j); }} drawCtx.stroke();
+                    }} else if (s.uType === 'largegoal_v') {{
+                        drawCtx.strokeStyle = "#ffffff"; drawCtx.lineWidth = 5; drawCtx.strokeRect(s.x - 10, s.y - 45, 20, 90);
+                        drawCtx.strokeStyle = "rgba(255,255,255,0.4)"; drawCtx.lineWidth = 1.5; drawCtx.beginPath();
+                        for(let i=-40; i<=40; i+=8) {{ drawCtx.moveTo(s.x - 10, s.y + i); drawCtx.lineTo(s.x + 10, s.y + i); }}
+                        for(let j=-5; j<=5; j+=5) {{ drawCtx.moveTo(s.x + j, s.y - 45); drawCtx.lineTo(s.x + j, s.y + 45); }} drawCtx.stroke();
+                    }}
+                }}
+            }});
+        }}
+        
+        function scaleBoard() {{
+            const container = document.getElementById('board-container');
+            const wrapper = document.getElementById('board-wrapper');
+            const ratio = window.innerWidth / 560;
+            
+            if (ratio > 0.1 && ratio < 1) {{ 
+                container.style.transform = `scale(${{ratio}})`; 
+                wrapper.style.height = (380 * ratio) + "px";
+            }} else {{
+                container.style.transform = `scale(1)`;
+                wrapper.style.height = "380px";
+            }}
+        }}
+        
+        // Der moderne Lebensretter für versteckte Elemente!
+        const resizeObserver = new ResizeObserver(() => {{
+            scaleBoard();
+        }});
+        resizeObserver.observe(document.body);
+        
+        drawPitch(); redrawAll();
+    </script>
+    </body>
+    </html>
+    """
+    st.components.v1.html(html_code, height=height)
+
+# --- JSON ZU SVG KONVERTER FÜR DRUCKANSICHT ---
+def json_zu_svg(json_str):
+    try:
+        import json, math
+        data = json.loads(json_str)
+        template = "Plain"
+        shapes = []
+        if isinstance(data, list):
+            for s in data:
+                if s.get("type") == "meta": template = s.get("template", "Plain")
+                else: shapes.append(s)
+        
+        w, h = 550, 380
+        svg = f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" style="background-color: #2e7d32; border-radius: 4px; width: 100%; height: auto;">'
+        
+        # Einzigartige ID für das Rasenmuster generieren, damit es beim Drucken mehrerer Skizzen nicht kollidiert
+        pattern_id = f"grid_{id(json_str)}"
+        svg += f'<defs><pattern id="{pattern_id}" width="100" height="{h}" patternUnits="userSpaceOnUse"><rect width="50" height="{h}" fill="#388e3c"/></pattern></defs>'
+        svg += f'<rect width="100%" height="100%" fill="url(#{pattern_id})" />'
+        svg += f'<rect x="30" y="30" width="{w-60}" height="{h-60}" fill="none" stroke="#ffffff" stroke-width="3" />'
+        
+        if template == "EinTor":
+            svg += f'<rect x="100" y="200" width="350" height="150" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="180" y="290" width="190" height="60" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="215" y="350" width="120" height="16" fill="#e2e8f0" stroke="#ffffff" />'
+            svg += f'<circle cx="275" cy="270" r="4" fill="#ffffff" />'
+            svg += f'<path d="M 190 200 A 85 85 0 0 1 360 200" fill="none" stroke="#ffffff" stroke-width="3" />'
+        elif template == "ZweiTore":
+            svg += f'<line x1="30" y1="{h/2}" x2="{w-30}" y2="{h/2}" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<circle cx="275" cy="{h/2}" r="50" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<circle cx="275" cy="{h/2}" r="4" fill="#ffffff" />'
+            svg += f'<rect x="100" y="30" width="350" height="80" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="180" y="30" width="190" height="30" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="215" y="14" width="120" height="16" fill="#e2e8f0" stroke="#ffffff" />'
+            svg += f'<circle cx="275" cy="90" r="4" fill="#ffffff" />'
+            svg += f'<rect x="100" y="270" width="350" height="80" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="180" y="320" width="190" height="30" fill="none" stroke="#ffffff" stroke-width="3" />'
+            svg += f'<rect x="215" y="350" width="120" height="16" fill="#e2e8f0" stroke="#ffffff" />'
+            svg += f'<circle cx="275" cy="290" r="4" fill="#ffffff" />'
+
+        for s in shapes:
+            t = s.get("type")
+            c = s.get("color", "#ffffff")
+            if t == "dot":
+                x, y = s.get("x", 0), s.get("y", 0)
+                svg += f'<circle cx="{x}" cy="{y}" r="11" fill="{c}" stroke="#ffffff" stroke-width="2" />'
+            elif t in ["line", "dashed"]:
+                x1, y1, x2, y2 = s.get("x1", 0), s.get("y1", 0), s.get("x2", 0), s.get("y2", 0)
+                dash = 'stroke-dasharray="8,6"' if t == "dashed" else ""
+                svg += f'<line x1="{x1}" y1="{y1}" x2="{x2}" y2="{y2}" stroke="{c}" stroke-width="4" {dash} />'
+                angle = math.atan2(y2 - y1, x2 - x1)
+                svg += f'<polygon points="{x2},{y2} {x2 - 13 * math.cos(angle - math.pi/6)},{y2 - 13 * math.sin(angle - math.pi/6)} {x2 - 13 * math.cos(angle + math.pi/6)},{y2 - 13 * math.sin(angle + math.pi/6)}" fill="{c}" />'
+            elif t == "curve":
+                x0, y0, cx, cy, x2, y2 = s.get("x0", 0), s.get("y0", 0), s.get("cx", 0), s.get("cy", 0), s.get("x2", 0), s.get("y2", 0)
+                svg += f'<path d="M {x0} {y0} Q {cx} {cy} {x2} {y2}" fill="none" stroke="{c}" stroke-width="4" />'
+                angle = math.atan2(y2 - cy, x2 - cx)
+                svg += f'<polygon points="{x2},{y2} {x2 - 13 * math.cos(angle - math.pi/6)},{y2 - 13 * math.sin(angle - math.pi/6)} {x2 - 13 * math.cos(angle + math.pi/6)},{y2 - 13 * math.sin(angle + math.pi/6)}" fill="{c}" />'
+            elif t == "text":
+                x, y = s.get("x", 0), s.get("y", 0)
+                for i, l in enumerate(str(s.get("text", "")).split("\\n")):
+                    svg += f'<text x="{x-10}" y="{y+10+(i*18)}" font-family="Arial" font-weight="bold" font-size="15px" fill="#000000">{l}</text>'
+            elif t == "utensil":
+                u, x, y = s.get("uType"), s.get("x", 0), s.get("y", 0)
+                if u == "cone": svg += f'<polygon points="{x},{y-10} {x+10},{y+10} {x-10},{y+10}" fill="#ea580c" />'
+                elif u == "pole": 
+                    svg += f'<line x1="{x}" y1="{y-12}" x2="{x}" y2="{y+12}" stroke="#facc15" stroke-width="4" />'
+                    svg += f'<circle cx="{x}" cy="{y+12}" r="4" fill="#000000" />'
+                elif u == "minigoal": svg += f'<rect x="{x-20}" y="{y-5}" width="40" height="10" fill="none" stroke="#ffffff" stroke-width="4" />'
+                elif u == "minigoal_v": svg += f'<rect x="{x-5}" y="{y-20}" width="10" height="40" fill="none" stroke="#ffffff" stroke-width="4" />'
+                elif u == "largegoal": svg += f'<rect x="{x-45}" y="{y-10}" width="90" height="20" fill="none" stroke="#ffffff" stroke-width="5" />'
+                elif u == "largegoal_v": svg += f'<rect x="{x-10}" y="{y-45}" width="20" height="90" fill="none" stroke="#ffffff" stroke-width="5" />'
+
+        svg += '</svg>'
+        return svg
+    except Exception:
+        return ""
 
 # --- GENERATOR FÜR DRUCKFERTIGES DIN-A4 TRAININGSPLAN-PDF ---
 def generiere_druck_html(einheits_titel, datum_str, phasen_liste):
@@ -91,8 +323,12 @@ def generiere_druck_html(einheits_titel, datum_str, phasen_liste):
 
     for p in phasen_liste:
         svg_code = p.get('grafik', '').strip()
-        if not svg_code or '<svg' not in svg_code:
+        if not svg_code or ('<svg' not in svg_code and not svg_code.startswith('[')):
             svg_code = p.get('svg_code', '').strip()
+            
+        # Wandelt den Board-Code (JSON) nahtlos in ein druckbares Bild (SVG) um
+        if svg_code.startswith('['):
+            svg_code = json_zu_svg(svg_code)
 
         html_content += f"""
         <div class="phase-box">
@@ -382,7 +618,9 @@ def render_html5_taktikboard():
                 alert("Es gibt nichts zu exportieren! Das Feld ist leer.");
                 return;
             }
-            const dataStr = JSON.stringify(shapes);
+            const currentTemplate = document.getElementById('templateSelect').value;
+            const exportData = [...shapes, { type: 'meta', template: currentTemplate }];
+            const dataStr = JSON.stringify(exportData);
             prompt("Kopiere diesen Taktik-Code (Strg+C) und füge ihn in das Textfeld deiner Übung ein:", dataStr);
             statusBar.innerText = "✅ Taktik-Code bereitgestellt!";
         }
@@ -394,7 +632,14 @@ def render_html5_taktikboard():
                     const parsed = JSON.parse(dataStr);
                     if (Array.isArray(parsed)) {
                         saveSnapshot();
-                        shapes = parsed;
+                        
+                        const metaObj = parsed.find(s => s.type === 'meta');
+                        if (metaObj && metaObj.template) {
+                            document.getElementById('templateSelect').value = metaObj.template;
+                            resetPitch();
+                        }
+                        
+                        shapes = parsed.filter(s => s.type !== 'meta');
                         selectedShapes = [];
                         redrawAll();
                         statusBar.innerText = "📂 Skizze erfolgreich geladen und kann jetzt bearbeitet werden!";
@@ -412,7 +657,9 @@ def render_html5_taktikboard():
                 alert("Das Feld ist leer! Zeichne zuerst eine Skizze.");
                 return;
             }
-            const dataStr = JSON.stringify(shapes);
+            const currentTemplate = document.getElementById('templateSelect').value;
+            const exportData = [...shapes, { type: 'meta', template: currentTemplate }];
+            const dataStr = JSON.stringify(exportData);
             prompt("📋 Kopiere diesen Taktik-Code (Strg+C) und füge ihn unten im Zuordnungs-Formular ein:", dataStr);
             statusBar.innerText = "⚽ Taktik-Code in die Zwischenablage kopiert!";
         }
@@ -3796,7 +4043,8 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                       st.markdown('**🎨 Taktik-Skizze mit Maßangaben:**')
                       render_svg_responsive(svg_code, height=340)
                     elif svg_code and svg_code.startswith('['):
-                      st.info("💡 Diese Übung enthält einen Taktik-Code aus deinem Board! Kopiere ihn einfach hier raus und lade ihn im Taktikboard (Tab: Skizzen zeichnen) über den '📂 Import'-Button, um die Übung zu bearbeiten.")
+                      st.markdown('**🎨 Taktik-Skizze aus deinem Board:**')
+                      render_taktik_viewer(svg_code, height=400)
                     # -------------------------------------------
 
                     with st.form(key=f"edit_ex_form_{ex['id']}"):
