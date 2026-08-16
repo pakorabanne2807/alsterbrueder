@@ -271,6 +271,9 @@ def render_html5_taktikboard():
         <button id="btn_curve" class="tool-btn" onclick="setTool('curve')">➰ Kurve</button>
         
         <div class="divider"></div>
+        <button class="tool-btn" onclick="undoLast()" title="Aktion rückgängig machen">↩️ Zurück</button>
+        <button class="tool-btn" onclick="redoLast()" title="Aktion wiederholen">↪️ Vor</button>
+        <div class="divider"></div>
         <button class="tool-btn" onclick="copySelection()" title="Auswahl kopieren (Strg+C)">📋 Kopieren</button>
         <button class="tool-btn" onclick="pasteSelection()" title="Auswahl einfügen (Strg+V)">📥 Einfügen</button>
         <button class="tool-btn" style="color: #ef4444;" onclick="deleteSelection()" title="Auswahl löschen (Entf)">🗑️ Löschen</button>
@@ -317,6 +320,7 @@ def render_html5_taktikboard():
 
         let shapes = []; 
         let history = []; 
+        let redoHistory = [];
         let curveStep = 0;
         let curveP0 = {x: 0, y: 0};
         let curveP2 = {x: 0, y: 0};
@@ -351,6 +355,8 @@ def render_html5_taktikboard():
         }
 
         function setTool(t) {
+            selectedMobileItem = null;
+            document.querySelectorAll('.drag-item').forEach(el => el.classList.remove('selected-item'));
             activeTool = t;
             document.querySelectorAll('.tool-btn').forEach(b => b.classList.remove('active'));
             document.getElementById('btn_' + t).classList.add('active');
@@ -532,12 +538,23 @@ def render_html5_taktikboard():
         window.addEventListener('keydown', function(e) {
             if (document.activeElement.tagName === 'TEXTAREA' || document.activeElement.tagName === 'INPUT') return;
             
+            const key = e.key.toLowerCase();
+            
             if (e.key === 'Delete' || e.key === 'Backspace') {
                 deleteSelection();
-            } else if (e.key === 'c' && (e.ctrlKey || e.metaKey)) {
+            } else if (key === 'c' && (e.ctrlKey || e.metaKey)) {
                 copySelection();
-            } else if (e.key === 'v' && (e.ctrlKey || e.metaKey)) {
+            } else if (key === 'v' && (e.ctrlKey || e.metaKey)) {
                 pasteSelection();
+            } else if (key === 'z' && (e.ctrlKey || e.metaKey) && e.shiftKey) {
+                e.preventDefault();
+                redoLast();
+            } else if (key === 'z' && (e.ctrlKey || e.metaKey) && !e.shiftKey) {
+                e.preventDefault();
+                undoLast();
+            } else if (key === 'y' && (e.ctrlKey || e.metaKey)) {
+                e.preventDefault();
+                redoLast();
             }
         });
 
@@ -710,9 +727,10 @@ def render_html5_taktikboard():
             }
         }
 
-        function saveSnapshot() { history.push(JSON.parse(JSON.stringify(shapes))); }
-        function undoLast() { curveStep = 0; if (history.length > 0) { shapes = history.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
-        function clearDrawings() { curveStep = 0; shapes = []; history = []; selectedShapes = []; drawCtx.clearRect(0, 0, 550, 380); updateStatus(); }
+        function saveSnapshot() { history.push(JSON.parse(JSON.stringify(shapes))); redoHistory = []; }
+        function undoLast() { curveStep = 0; if (history.length > 0) { redoHistory.push(JSON.parse(JSON.stringify(shapes))); shapes = history.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
+        function redoLast() { curveStep = 0; if (redoHistory.length > 0) { history.push(JSON.parse(JSON.stringify(shapes))); shapes = redoHistory.pop(); selectedShapes = []; redrawAll(); } updateStatus(); }
+        function clearDrawings() { curveStep = 0; shapes = []; history = []; redoHistory = []; selectedShapes = []; drawCtx.clearRect(0, 0, 550, 380); updateStatus(); }
         function getPos(e) { const rect = drawCanvas.getBoundingClientRect(); return { x: e.clientX - rect.left, y: e.clientY - rect.top }; }
 
         // Hilfsfunktion für Touch-Koordinaten auf dem Smartphone
@@ -789,9 +807,6 @@ def render_html5_taktikboard():
                     shapes.push(newShape);
                     selectedShapes = [newShape];
                 }
-                selectedMobileItem.element.classList.remove('selected-item');
-                selectedMobileItem = null;
-                setTool('move');
                 redrawAll();
                 return;
             }
@@ -1373,6 +1388,44 @@ def generiere_ki_einheit_5_phasen(anzahl_spieler, gewaehlte_phasen_bool, api_key
     except Exception as e:
         st.error(f"Fehler bei KI-Generierung: {e}")
         return alter_plan
+
+# --- FUNKTION: KI-TRAININGSPLAN ÜBER CHAT ANPASSEN ---
+def anpassung_ki_einheit_chat(aktueller_plan, user_msg, api_key):
+    if not api_key: return None
+    
+    plan_json_str = json.dumps(aktueller_plan, ensure_ascii=False)
+    prompt = f"""
+Du bist ein Fußballexperte für eine U13.
+Hier ist der aktuelle 5-Phasen Trainingsplan im JSON-Format:
+{plan_json_str}
+
+Der Trainer hat folgenden Änderungswunsch zu diesem Plan:
+"{user_msg}"
+
+Passe den Plan entsprechend an. 
+Bedenke unsere Ressourcen: Viertelfeld, max. 2 Jugendtore, 4 Minitore, Hütchen und Stangen.
+
+GIB AUSSCHLIESSLICH EIN SAUBERES JSON-ARRAY ZURÜCK!
+Die Struktur muss exakt so bleiben, wie du sie erhalten hast (mit allen 5 Phasen, phase_num, exercise_name, etc.).
+"""
+    try:
+        raw_text = get_gemini_json_text(prompt, api_key)
+        cleaned = extract_json_array(raw_text)
+        angepasster_plan = json.loads(cleaned)
+        
+        # Sicherstellen, dass das Ergebnis eine Liste ist
+        if isinstance(angepasster_plan, dict):
+            for k in ["plan", "phasen", "exercises"]:
+                if k in angepasster_plan:
+                    angepasster_plan = angepasster_plan[k]
+                    break
+            else:
+                angepasster_plan = [angepasster_plan]
+                
+        return angepasster_plan
+    except Exception as e:
+        st.error(f"Fehler bei der KI-Chat-Anpassung: {e}")
+        return None
 
 # ==============================================================================
 # 2. SKIZZEN-GENERATOR FÜR EINE EINZELNE ÜBUNG (AUF KNOPFDRUCK)
