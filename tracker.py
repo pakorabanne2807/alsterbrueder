@@ -211,12 +211,14 @@ def json_zu_svg(json_str):
                 else: shapes.append(s)
         
         w, h = 550, 380
-        svg = f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" style="background-color: #2e7d32; border-radius: 4px; width: 100%; height: auto;">'
+        svg = f'<svg viewBox="0 0 {w} {h}" xmlns="http://www.w3.org/2000/svg" style="border-radius: 4px; width: 100%; height: auto;">'
         
-        # Einzigartige ID für das Rasenmuster generieren, damit es beim Drucken mehrerer Skizzen nicht kollidiert
-        pattern_id = f"grid_{id(json_str)}"
-        svg += f'<defs><pattern id="{pattern_id}" width="100" height="{h}" patternUnits="userSpaceOnUse"><rect width="50" height="{h}" fill="#388e3c"/></pattern></defs>'
-        svg += f'<rect width="100%" height="100%" fill="url(#{pattern_id})" />'
+        # Fester Hintergrund und explizite Rechtecke statt Pattern (100% druckerfreundlich)
+        svg += f'<rect width="100%" height="100%" fill="#2e7d32" />'
+        for i in range(0, w, 50):
+            if (i // 50) % 2 == 0:
+                svg += f'<rect x="{i}" y="0" width="50" height="{h}" fill="#388e3c" />'
+                
         svg += f'<rect x="30" y="30" width="{w-60}" height="{h-60}" fill="none" stroke="#ffffff" stroke-width="3" />'
         
         if template == "EinTor":
@@ -312,7 +314,7 @@ def generiere_druck_html(einheits_titel, datum_str, phasen_liste):
         <div class="header">
             <div>
                 <h1>⚽ {einheits_titel}</h1>
-                <span style="font-size: 10pt; color: #475569;">SC Alsterbrüder U13 – Trainingsplan</span>
+                <span style="font-size: 10pt; color: #475569;">FC Alsterbrüder U13 – Trainingsplan</span>
             </div>
             <div class="meta">
                 <b>Datum:</b> {datum_str}<br>
@@ -326,21 +328,25 @@ def generiere_druck_html(einheits_titel, datum_str, phasen_liste):
         if not svg_code or ('<svg' not in svg_code and not svg_code.startswith('[')):
             svg_code = p.get('svg_code', '').strip()
             
-        # Wandelt den Board-Code (JSON) nahtlos in ein druckbares Bild (SVG) um
         if svg_code.startswith('['):
             svg_code = json_zu_svg(svg_code)
+            
+        # Texte intelligent zusammenführen
+        text_content = p.get('aufbau', '').strip()
+        if not text_content:
+            parts = []
+            if p.get('setup_text'): parts.append(f"🛠️ Aufbau: {p.get('setup_text')}")
+            if p.get('flow_text'): parts.append(f"🏃‍♂️ Ablauf: {p.get('flow_text')}")
+            if p.get('coaching_points'): parts.append(f"🗣️ Coaching: {p.get('coaching_points')}")
+            text_content = "\n\n".join(parts) if parts else "-"
 
         html_content += f"""
         <div class="phase-box">
             <div class="phase-title">{p.get('phase', p.get('phase_title', 'Phase'))}: {p.get('name', p.get('exercise_name', 'Übung'))}</div>
             <div class="content-grid">
                 <div class="text-col">
-                    <span class="section-label">🛠️ Aufbau & Material:</span>
-                    <p class="section-text">{p.get('aufbau', p.get('setup_text', '-'))}</p>
-                    <span class="section-label">🏃‍♂️ Ablauf & Regeln:</span>
-                    <p class="section-text">{p.get('flow_text', '-') if 'flow_text' in p else ''}</p>
-                    <span class="section-label">🗣️ Coaching-Punkte:</span>
-                    <p class="section-text">{p.get('coaching_points', '-') if 'coaching_points' in p else ''}</p>
+                    <span class="section-label">🛠️ Beschreibung & Coaching:</span>
+                    <p class="section-text">{text_content}</p>
                 </div>
                 <div class="gfx-col">
                     {svg_code if ("<svg" in svg_code) else "<span style='font-size: 8pt; color: #94a3b8;'>Keine Skizze</span>"}
@@ -3867,21 +3873,21 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                         for ex in passende
                     }
                     
-                    selected_key = st.selectbox(
-                        f"Übung für {phase_name} wählen:", 
+                    selected_keys = st.multiselect(
+                        f"Übung(en) für {phase_name} wählen:", 
                         options=list(options_map.keys()), 
                         key=f"baukasten_p_{i}"
                     )
                     
-                    if selected_key:
-                        gewaehlte_einheit.append(options_map[selected_key])
+                    for k in selected_keys:
+                        gewaehlte_einheit.append(options_map[k])
                 else:
                     st.warning(f"⚠️ Keine passende Übung für '{phase_name}' mit diesen Kriterien ({b_min_sp}–{b_max_sp} Spieler, {b_filter_tw}) in der Datenbank.")
 
             st.divider()
 
-            # Download-Button erscheint, sobald alle 5 Phasen besetzt sind
-            if len(gewaehlte_einheit) == 5:
+            # Download-Button erscheint, sobald mindestens 1 Übung gewählt wurde
+            if len(gewaehlte_einheit) > 0:
                 pdf_html = generiere_druck_html(plan_titel, plan_datum.strftime("%d.%m.%Y"), gewaehlte_einheit)
                 
                 st.download_button(
@@ -3894,7 +3900,7 @@ if selected_tab == "📋 Trainingsplaner" and is_trainer:
                 
                 st.info("💡 **Tipp:** Wenn du die heruntergeladene Datei öffnest, klickst du einfach auf 'Als PDF speichern'. So erhältst du ein perfektes DIN A4 Dokument inkl. aller Taktikskizzen!")
             elif db_exercises:
-                st.caption("ℹ️ Sobald für alle 5 Phasen jeweils eine Übung gewählt ist, wird der PDF-Download freigeschaltet.")
+                st.caption("ℹ️ Wähle mindestens eine Übung aus, um den PDF-Download freizuschalten.")
     with p_tab_gen:
         c_conf1, c_col2 = st.columns([1, 1])
         with c_conf1:
