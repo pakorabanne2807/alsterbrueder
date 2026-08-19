@@ -1865,16 +1865,32 @@ def lade_daten():
     data = None
     local_data = None
     
-    try:
-        conn = sqlite3.connect(DB_FILE)
-        c = conn.cursor()
-        c.execute('SELECT data FROM store WHERE id="main"')
-        row = c.fetchone()
-        conn.close()
-        if row:
-            local_data = json.loads(row[0])
-    except Exception:
-        local_data = None
+    jsonbin_key = get_secret_value("JSONBIN_KEY", "")
+    jsonbin_id = get_secret_value("JSONBIN_ID", "")
+    
+    # 1. Priorität: Aus der Cloud (JSONBin) laden, falls konfiguriert
+    if jsonbin_key and jsonbin_id:
+        try:
+            url = f"https://api.jsonbin.io/v3/b/{jsonbin_id}/latest"
+            headers = {"X-Master-Key": jsonbin_key}
+            response = requests.get(url, headers=headers, timeout=10)
+            if response.status_code == 200:
+                data = response.json().get("record")
+        except Exception as e:
+            print(f"Fehler beim Laden von JSONBin: {e}")
+
+    # 2. Priorität: Lokale SQLite (falls Cloud ausfällt oder nicht eingerichtet ist)
+    if data is None:
+        try:
+            conn = sqlite3.connect(DB_FILE)
+            c = conn.cursor()
+            c.execute('SELECT data FROM store WHERE id="main"')
+            row = c.fetchone()
+            conn.close()
+            if row:
+                local_data = json.loads(row[0])
+        except Exception:
+            local_data = None
 
     if data is None or not isinstance(data, dict):
         if local_data:
@@ -1941,12 +1957,32 @@ def _cloud_sync_worker(payload_str, url):
 
 # --- PFEILSCHNELLE SPEICHERFUNKTION ---
 def speichere_daten(data):
-    lade_daten.clear() # Leert den Cache, damit beim nächsten Reload die frischen Daten geladen werden!
-    berechne_statistiken.clear() # NEU: Statistik-Cache bei neuen Daten sofort leeren!
+    lade_daten.clear()
+    berechne_statistiken.clear()
     
     st.session_state.data = data
     payload_str = json.dumps(data, ensure_ascii=False)
     
+    jsonbin_key = get_secret_value("JSONBIN_KEY", "")
+    jsonbin_id = get_secret_value("JSONBIN_ID", "")
+    
+    # 1. Cloud-Speicherung (JSONBin)
+    if jsonbin_key and jsonbin_id:
+        def _save_to_jsonbin(payload_dict, key, bin_id):
+            try:
+                url = f"https://api.jsonbin.io/v3/b/{bin_id}"
+                headers = {
+                    "X-Master-Key": key,
+                    "Content-Type": "application/json"
+                }
+                requests.put(url, json=payload_dict, headers=headers, timeout=15)
+            except Exception as e:
+                print(f"Hintergrund-Speicherfehler JSONBin: {e}")
+        
+        # Im Hintergrund speichern, damit die App reaktionsschnell bleibt
+        threading.Thread(target=_save_to_jsonbin, args=(data, jsonbin_key, jsonbin_id), daemon=True).start()
+
+    # 2. Lokales Backup (SQLite & File) - zur Sicherheit weiterhin aktiv
     try:
         conn = sqlite3.connect(DB_FILE)
         c = conn.cursor()
@@ -1954,15 +1990,13 @@ def speichere_daten(data):
         conn.commit()
         conn.close()
         
-        # --- NEU: Automatische Backup-Zeitmaschine ---
         if not os.path.exists("backups"):
             os.makedirs("backups")
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         backup_path = os.path.join("backups", f"alsterbrueder_backup_{timestamp}.json")
         with open(backup_path, "w", encoding="utf-8") as f:
             f.write(payload_str)
-        # ---------------------------------------------
-        
+            
     except Exception as e:
         st.error(f"❌ lokaler Speicherfehler (SQLite): {e}")
 
@@ -1995,35 +2029,46 @@ with st.sidebar:
     
     if is_trainer:
         st.success("👨‍🍳 Trainer-Modus aktiv")
-        with st.expander("⚙️ Erweitere API-Einstellungen", expanded=False):
-            gemini_key_input = st.text_input(
-                "🔑 Gemini API Key (Manuelle Eingabe):", 
-                value=gemini_key if gemini_key else "", 
-                type="password", 
-                key="gemini_key_input_neu"
-            )
-            if gemini_key_input:
-                gemini_key = gemini_key_input.strip()
-                
-            # --- Live Status-Ampel für den API-Key ---
-            if gemini_key:
-                try:
-                    # Blitzschneller Check bei Google
-                    test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}"
-                    test_res = requests.get(test_url, timeout=2)
+        with st.expander("⚙️ Erweitere API & Cloud Einstellungen", expanded=False):
+                gemini_key_input = st.text_input(
+                    "🔑 Gemini API Key (Manuelle Eingabe):", 
+                    value=gemini_key if gemini_key else "", 
+                    type="password", 
+                    key="gemini_key_input_neu"
+                )
+                if gemini_key_input:
+                    gemini_key = gemini_key_input.strip()
                     
-                    if test_res.status_code == 200:
-                        st.success("🟢 API-Key gültig & verbunden!")
-                    elif test_res.status_code == 400:
-                        st.error("🔴 Ungültiges Format (Leerzeichen?)")
-                    elif test_res.status_code == 401:
-                        st.error("🔴 Key abgelehnt (Nicht autorisiert)")
-                    else:
-                        st.warning(f"🟡 Fehler (Code: {test_res.status_code})")
-                except requests.exceptions.RequestException:
-                    st.warning("⚪ Keine Internetverbindung")
-            else:
-                st.info("⚪ Kein Key hinterlegt")
+                # --- Live Status-Ampel für den API-Key ---
+                if gemini_key:
+                    try:
+                        # Blitzschneller Check bei Google
+                        test_url = f"https://generativelanguage.googleapis.com/v1beta/models?key={gemini_key}"
+                        test_res = requests.get(test_url, timeout=2)
+                        
+                        if test_res.status_code == 200:
+                            st.success("🟢 API-Key gültig & verbunden!")
+                        elif test_res.status_code == 400:
+                            st.error("🔴 Ungültiges Format (Leerzeichen?)")
+                        elif test_res.status_code == 401:
+                            st.error("🔴 Key abgelehnt (Nicht autorisiert)")
+                        else:
+                            st.warning(f"🟡 Fehler (Code: {test_res.status_code})")
+                    except requests.exceptions.RequestException:
+                        st.warning("⚪ Keine Internetverbindung")
+                else:
+                    st.info("⚪ Kein API-Key hinterlegt")
+                    
+                # --- Status-Ampel für JSONBin (Cloud-Datenbank) ---
+                st.markdown("---")
+                st.markdown("**☁️ Cloud-Datenbank Status**")
+                jsonbin_key_check = get_secret_value("JSONBIN_KEY", "")
+                jsonbin_id_check = get_secret_value("JSONBIN_ID", "")
+                
+                if jsonbin_key_check and jsonbin_id_check:
+                    st.success("🟢 JSONBin sicher verbunden! (Kein Datenverlust)")
+                else:
+                    st.warning("⚪ Lokaler Speicher aktiv (Nur temporär sicher!)")
     else:
         st.info("👪 Eltern-Modus aktiv")
         
