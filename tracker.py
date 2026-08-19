@@ -2066,7 +2066,21 @@ with st.sidebar:
                 jsonbin_id_check = get_secret_value("JSONBIN_ID", "")
                 
                 if jsonbin_key_check and jsonbin_id_check:
-                    st.success("🟢 JSONBin sicher verbunden! (Kein Datenverlust)")
+                    try:
+                        test_url = f"https://api.jsonbin.io/v3/b/{jsonbin_id_check}/latest"
+                        headers = {"X-Master-Key": jsonbin_key_check}
+                        test_res = requests.get(test_url, headers=headers, timeout=4)
+                        
+                        if test_res.status_code == 200:
+                            st.success("🟢 JSONBin sicher verbunden! (Kein Datenverlust)")
+                        elif test_res.status_code in [401, 403]:
+                            st.error("🔴 JSONBin-Key abgelehnt (Nicht autorisiert)")
+                        elif test_res.status_code == 404:
+                            st.error("🔴 JSONBin-ID nicht gefunden")
+                        else:
+                            st.warning(f"🟡 Fehler (Code: {test_res.status_code})")
+                    except requests.exceptions.RequestException:
+                        st.warning("⚪ Keine Internetverbindung")
                 else:
                     st.warning("⚪ Lokaler Speicher aktiv (Nur temporär sicher!)")
     else:
