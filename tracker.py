@@ -2159,19 +2159,19 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
 def generiere_duo_pitch_html(t_blau, b_blau_list, layout_blau, t_gelb, b_gelb_list, layout_gelb):
     html_code = f"""
     <style>
-    .duo-container {{ display: flex; gap: 20px; justify-content: center; align-items: flex-start; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: auto; padding: 10px 0; }}
-    .team-section {{ display: flex; gap: 10px; align-items: flex-start; background: #ffffff; padding: 10px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
+    .duo-container {{ display: flex; gap: 10px; justify-content: center; align-items: flex-start; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; overflow-x: auto; padding: 10px 0; flex-wrap: wrap; }}
+    .team-section {{ display: flex; gap: 8px; align-items: flex-start; background: #ffffff; padding: 10px; border-radius: 10px; box-shadow: 0 2px 8px rgba(0,0,0,0.1); }}
     .team-title {{ font-size: 14px; font-weight: bold; margin-bottom: 8px; text-align: center; color: #1e293b; }}
-    .field {{ width: 300px; height: 420px; background-color: #2e7d32; background-image: linear-gradient(#388e3c 50%, #2e7d32 50%); background-size: 100% 40px; border: 4px solid #ffffff; border-radius: 8px; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }}
+    .field {{ width: 270px; height: 380px; background-color: #2e7d32; background-image: linear-gradient(#388e3c 50%, #2e7d32 50%); background-size: 100% 40px; border: 4px solid #ffffff; border-radius: 8px; position: relative; box-shadow: 0 4px 10px rgba(0,0,0,0.3); }}
     .field::before {{ content: ''; position: absolute; top: 50%; left: 0; width: 100%; height: 2px; background: rgba(255,255,255,0.5); }}
-    .center-circle {{ position: absolute; top: 50%; left: 50%; width: 60px; height: 60px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); }}
-    .slot {{ position: absolute; width: 74px; height: 46px; border: 1px dashed rgba(255,255,255,0.35); border-radius: 5px; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; }}
+    .center-circle {{ position: absolute; top: 50%; left: 50%; width: 50px; height: 50px; border: 2px solid rgba(255,255,255,0.5); border-radius: 50%; transform: translate(-50%, -50%); }}
+    .slot {{ position: absolute; width: 68px; height: 42px; border: 1px dashed rgba(255,255,255,0.35); border-radius: 5px; transform: translateX(-50%); display: flex; align-items: center; justify-content: center; }}
     .slot-label {{ position: absolute; top: -11px; width: 100%; text-align: center; font-size: 8.5px; color: rgba(255,255,255,0.6); font-weight: bold; text-shadow: 0 1px 2px rgba(0,0,0,0.8); }}
-    .player {{ width: 70px; height: 42px; background: #facc15; color: #1e3a8a; border: 1px solid #eab308; border-radius: 4px; font-size: 10.5px; font-weight: bold; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.25); padding: 1px; box-sizing: border-box; }}
-    .player .nr {{ font-size: 8.5px; color: #ffffff; background: #1e3a8a; padding: 0px 3px; border-radius: 2px; margin-bottom: 1px; }}
+    .player {{ width: 64px; height: 38px; background: #facc15; color: #1e3a8a; border: 1px solid #eab308; border-radius: 4px; font-size: 10px; font-weight: bold; text-align: center; display: flex; flex-direction: column; justify-content: center; align-items: center; cursor: move; box-shadow: 0 2px 4px rgba(0,0,0,0.25); padding: 1px; box-sizing: border-box; line-height: 1.1; }}
+    .player .nr {{ font-size: 8px; color: #ffffff; background: #1e3a8a; padding: 0px 3px; border-radius: 2px; margin-bottom: 1px; }}
     .player .name-text {{ overflow: hidden; text-overflow: ellipsis; white-space: nowrap; width: 100%; }}
-    .bench {{ width: 130px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); height: 420px; box-sizing: border-box; display: flex; flex-direction: column; }}
-    .bench-title {{ font-size: 11.5px; font-weight: bold; color: #64748b; text-align: center; margin-bottom: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
+    .bench {{ width: 110px; background: #f8fafc; border: 1px solid #e2e8f0; border-radius: 8px; padding: 6px; box-shadow: 0 2px 5px rgba(0,0,0,0.05); height: 380px; box-sizing: border-box; display: flex; flex-direction: column; }}
+    .bench-title {{ font-size: 11px; font-weight: bold; color: #64748b; text-align: center; margin-bottom: 8px; border-bottom: 1px solid #e2e8f0; padding-bottom: 4px; }}
     .bench-zone {{ flex: 1; display: flex; flex-direction: column; gap: 6px; overflow-y: auto; min-height: 100px; }}
     </style>
     <script>
@@ -3359,7 +3359,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
             # Notiz/Kommentar aus einem bestehenden Eintrag herauskratzen
             bisherige_notiz = ""
             for p in nur_spieler:
-                eintrag = next((t for t in p.get("training", []) if t.get("date") == selected_tr_date_str), None)
+                eintrag = next((t for t in p.get("training", []) if t.get("date") == selected_tr_date_str and str(t.get("type", "")).strip().lower() == "training"), None)
                 if eintrag and eintrag.get("note"):
                     bisherige_notiz = eintrag.get("note")
                     break
@@ -3375,7 +3375,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
                 st.caption("Die Anwesenheit basiert auf deinem SpielerPlus-Import. Hak einfach an, wer das Abschlussspiel gewonnen hat!")
                 for p in nur_spieler:
                     tr_history = p.get("training", [])
-                    sp_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str), None)
+                    sp_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str and str(t.get("type", "")).strip().lower() == "training"), None)
                     
                     war_anwesend = sp_eintrag["present"] if sp_eintrag else False
                     status_txt = "✅ Anwesend" if war_anwesend else ("❌ Abwesend" if sp_eintrag else "❓ Keine Daten")
@@ -3408,7 +3408,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
                 for p in nur_spieler:
                     # Prüfen, ob für das manuelle Datum bereits Daten existieren
                     tr_history = p.get("training", [])
-                    ex_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str), None)
+                    ex_eintrag = next((t for t in tr_history if t.get("date") == selected_tr_date_str and str(t.get("type", "")).strip().lower() == "training"), None)
                     is_anw_init = ex_eintrag["present"] if ex_eintrag else True
 
                     tr_spieler_daten.append({
@@ -3446,7 +3446,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
                         
                         if log_modus == "📅 Aus SpielerPlus-Import wählen":
                             # Nur Notiz ergänzen, Anwesenheit stammt aus Import
-                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str), None)
+                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str and str(t.get("type", "")).strip().lower() == "training"), None)
                             if bestehender_eintrag:
                                 bestehender_eintrag["note"] = tr_kommentar.strip()
                             else:
@@ -3454,7 +3454,7 @@ if (selected_tab in ["⚽ Spiel loggen", "📝 Loggen (Training & Spiel)"]) and 
                         else:
                             # Manuelles Training: Anwesenheit direkt speichern
                             is_anw = bool(row["Anwesend ⚽"])
-                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str), None)
+                            bestehender_eintrag = next((t for t in sp["training"] if t.get("date") == selected_tr_date_str and str(t.get("type", "")).strip().lower() == "training"), None)
                             if bestehender_eintrag:
                                 bestehender_eintrag["present"] = is_anw
                                 bestehender_eintrag["note"] = tr_kommentar.strip()
