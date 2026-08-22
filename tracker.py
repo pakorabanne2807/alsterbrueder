@@ -2651,7 +2651,7 @@ if selected_tab == "🔍 Spieler-Profile":
         # --- GAUSS/GLÄTTUNG: SCHWELLENWERTE FÜR SAISONSTART & HIGHSCORES ---
         # 1. Ausbalanciertere Profil-Vorlagen (Nebenstats bleiben in den 40er/50er Rängen)
         POS_PROFILE = {
-            "TW":   {"PAC": 0.58, "SHO": 0.42, "PAS": 0.65, "DRI": 0.52, "DEF": 0.88, "PHY": 0.72},
+            "TW":   {"PAC": 0.85, "SHO": 0.80, "PAS": 0.70, "DRI": 0.88, "DEF": 0.45, "PHY": 0.82}, # Mapped to DIV, HAN, KIC, REF, SPD, POS
             "IV":   {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
             "LIV":  {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
             "RIV":  {"PAC": 0.62, "SHO": 0.48, "PAS": 0.60, "DRI": 0.55, "DEF": 0.88, "PHY": 0.85},
@@ -2735,6 +2735,22 @@ if selected_tab == "🔍 Spieler-Profile":
         avg_def = int(sum([sp.get("base_def", 55) for sp in nur_spieler]) / len(nur_spieler))
         avg_phy = int(sum([sp.get("base_phy", 65) for sp in nur_spieler]) / len(nur_spieler))
 
+        # Weichenstellung: Torwart oder Feldspieler
+        if pos_main == "TW":
+            lbl_1, val_1, avg_1 = "DIV", pac, avg_pac
+            lbl_2, val_2, avg_2 = "HAN", sho, avg_sho
+            lbl_3, val_3, avg_3 = "KIC", pas, avg_pas
+            lbl_4, val_4, avg_4 = "REF", dri, avg_dri
+            lbl_5, val_5, avg_5 = "SPD", df_val, avg_def
+            lbl_6, val_6, avg_6 = "POS", phy, avg_phy
+        else:
+            lbl_1, val_1, avg_1 = "PAC", pac, avg_pac
+            lbl_2, val_2, avg_2 = "SHO", sho, avg_sho
+            lbl_3, val_3, avg_3 = "PAS", pas, avg_pas
+            lbl_4, val_4, avg_4 = "DRI", dri, avg_dri
+            lbl_5, val_5, avg_5 = "DEF", df_val, avg_def
+            lbl_6, val_6, avg_6 = "PHY", phy, avg_phy
+
         card_html = f"""
         <div style="background: linear-gradient(135deg, #1e3a8a 0%, #172554 40%, #eab308 100%); 
                     width: 260px; height: 350px; border-radius: 14px; padding: 20px; 
@@ -2750,14 +2766,14 @@ if selected_tab == "🔍 Spieler-Profile":
             </div>
             <div style="display: flex; justify-content: space-between; font-size: 13px; line-height: 24px;">
                 <div style="width: 45%; text-align: left;">
-                    <div><span style="color:#facc15;">{pac}</span> PAC</div>
-                    <div><span style="color:#facc15;">{sho}</span> SHO</div>
-                    <div><span style="color:#facc15;">{pas}</span> PAS</div>
+                    <div><span style="color:#facc15;">{val_1}</span> {lbl_1}</div>
+                    <div><span style="color:#facc15;">{val_2}</span> {lbl_2}</div>
+                    <div><span style="color:#facc15;">{val_3}</span> {lbl_3}</div>
                 </div>
                 <div style="width: 45%; text-align: left; border-left: 1px solid rgba(255,255,255,0.2); padding-left: 15px; box-sizing: border-box;">
-                    <div><span style="color:#facc15;">{dri}</span> DRI</div>
-                    <div><span style="color:#facc15;">{df_val}</span> DEF</div>
-                    <div><span style="color:#facc15;">{phy}</span> PHY</div>
+                    <div><span style="color:#facc15;">{val_4}</span> {lbl_4}</div>
+                    <div><span style="color:#facc15;">{val_5}</span> {lbl_5}</div>
+                    <div><span style="color:#facc15;">{val_6}</span> {lbl_6}</div>
                 </div>
             </div>
             <div style="position: absolute; bottom: 10px; left: 0; width: 100%; text-align: center; font-size: 11px; font-family: sans-serif; color: rgba(255,255,255,0.7); letter-spacing: 0.5px;">
@@ -2777,14 +2793,14 @@ if selected_tab == "🔍 Spieler-Profile":
 
         with c_right:
             st.markdown("### 🕸️ Skill-Profile vs. Team-Durchschnitt")
-            categories = ['PAC', 'SHO', 'PAS', 'DRI', 'DEF', 'PHY']
+            categories = [lbl_1, lbl_2, lbl_3, lbl_4, lbl_5, lbl_6]
             fig_radar = go.Figure()
             fig_radar.add_trace(go.Scatterpolar(
-                r=[pac, sho, pas, dri, df_val, phy, pac],
+                r=[val_1, val_2, val_3, val_4, val_5, val_6, val_1],
                 theta=categories + [categories[0]], fill='toself', name=p['name'], line_color='#facc15'
             ))
             fig_radar.add_trace(go.Scatterpolar(
-                r=[avg_pac, avg_sho, avg_pas, avg_dri, avg_def, avg_phy, avg_pac],
+                r=[avg_1, avg_2, avg_3, avg_4, avg_5, avg_6, avg_1],
                 theta=categories + [categories[0]], fill='toself', name='Team-Schnitt', line_color='#1e3a8a', opacity=0.35
             ))
             fig_radar.update_layout(
