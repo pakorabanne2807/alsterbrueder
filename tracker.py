@@ -2138,8 +2138,12 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
 
     winner_pics = spieler.get("winner_pics_count", 0)
 
+    # Sicherstellen, dass 'positions' existiert und eine Liste ist, um Abstürze zu vermeiden
+    raw_pos = spieler.get("positions")
+    sichere_positionen = raw_pos if isinstance(raw_pos, list) else ["-"]
+
     return {
-        "Nr.": nr, "Name": spieler["name"], "Positionen": ", ".join(spieler["positions"]),
+        "Nr.": nr, "Name": spieler.get("name", "Unbekannt"), "Positionen": ", ".join(sichere_positionen),
         "Beteiligung": round(beteiligungs_quote), "🏃‍♂️ Spiele": spiele_gesamt, "📸 Siegerfotos": winner_pics,
         "Meilenstein": club, "⚽ Tore": tore_gesamt, "🅰️ Vorlagen": vorlagen_gesamt, "🌟 Scorer": tore_gesamt + vorlagen_gesamt,
         "Badges": badges
