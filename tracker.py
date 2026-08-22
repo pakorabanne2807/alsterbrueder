@@ -2138,9 +2138,15 @@ def berechne_statistiken(spieler, erlaubte_typen=None):
 
     winner_pics = spieler.get("winner_pics_count", 0)
 
-    # Sicherstellen, dass 'positions' existiert und eine Liste ist, um Abstürze zu vermeiden
+    # Sicherstellen, dass 'positions' existiert und alle Elemente reine Strings sind
     raw_pos = spieler.get("positions")
-    sichere_positionen = raw_pos if isinstance(raw_pos, list) else ["-"]
+    if isinstance(raw_pos, list):
+        sichere_positionen = [str(p) for p in raw_pos if p]
+    else:
+        sichere_positionen = []
+        
+    if not sichere_positionen:
+        sichere_positionen = ["-"]
 
     return {
         "Nr.": nr, "Name": spieler.get("name", "Unbekannt"), "Positionen": ", ".join(sichere_positionen),
