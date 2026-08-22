@@ -1933,6 +1933,7 @@ def lade_daten():
     for p in data.get("players", []):
         if "role" not in p: p["role"] = "Spieler"
         if "number" not in p: p["number"] = ""
+        if "foot" not in p: p["foot"] = "Rechts"
         if "positions" not in p: p["positions"] = ["ZM"]
         if "pin" not in p: p["pin"] = ""
         if "video_url" not in p: p["video_url"] = ""
@@ -3268,7 +3269,7 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
         pos = p.get("positions", [])
         kader_liste.append({
             "ID": str(p["id"]), "Nr.": int(p.get("number", "")) if str(p.get("number", "")).isdigit() else None, 
-            "Name": p["name"], "Rolle": p.get("role", "Spieler"), 
+            "Name": p["name"], "Rolle": p.get("role", "Spieler"), "Starker Fuß": p.get("foot", "Rechts"),
             "Prio 1": pos[0] if len(pos) > 0 else "-", "Prio 2": pos[1] if len(pos) > 1 else "-", 
             "Prio 3": pos[2] if len(pos) > 2 else "-", "Prio 4": pos[3] if len(pos) > 3 else "-", 
             "Prio 5": pos[4] if len(pos) > 4 else "-",
@@ -3283,6 +3284,7 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
     editiertes_kader = st.data_editor(kader_df, hide_index=True, column_config={
         "ID": None, "Rolle": st.column_config.SelectboxColumn(options=["Spieler", "Trainer"], required=True), 
         "Nr.": st.column_config.NumberColumn("Nr.", format="%d"), 
+        "Starker Fuß": st.column_config.SelectboxColumn(options=["Links", "Rechts"]),
         "Prio 1": st.column_config.SelectboxColumn(options=["-"] + POSITIONS), 
         "Prio 2": st.column_config.SelectboxColumn(options=["-"] + POSITIONS),
         "Prio 3": st.column_config.SelectboxColumn(options=["-"] + POSITIONS),
@@ -3302,6 +3304,7 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
             
             if orig:
                 orig["name"], orig["role"], orig["number"], orig["positions"] = str(row["Name"]), str(row["Rolle"]), nr_str, (pos_liste if row["Rolle"] == "Spieler" else [])
+                orig["foot"] = str(row.get("Starker Fuß", "Rechts"))
                 orig["pin"] = str(row["PIN"]).strip()
                 if row["Rolle"] == "Spieler":
                     orig["base_pac"], orig["base_sho"], orig["base_pas"] = int(row["PAC"]), int(row["SHO"]), int(row["PAS"])
@@ -3310,7 +3313,7 @@ if selected_tab == "🏃‍♂️ Kader" and is_trainer:
             elif str(row["Name"]).strip():
                 neuer_kader.append({
                     "id": max([p["id"] for p in neuer_kader] + [p["id"] for p in st.session_state.data["players"]] + [0]) + 1, 
-                    "name": str(row["Name"]), "role": str(row["Rolle"]), "number": nr_str, "positions": pos_liste, "training": [], "matches": [],
+                    "name": str(row["Name"]), "role": str(row["Rolle"]), "foot": str(row.get("Starker Fuß", "Rechts")), "number": nr_str, "positions": pos_liste, "training": [], "matches": [],
                     "pin": str(row["PIN"]).strip(), "video_url": "", "video_notes": "", "points": 0, "completed_challenges": [], "solved_quizzes": [],
                     "base_pac": int(row["PAC"] or 75), "base_sho": int(row["SHO"] or 60), "base_pas": int(row["PAS"] or 65),
                     "base_dri": int(row["DRI"] or 70), "base_def": int(row["DEF"] or 55), "base_phy": int(row["PHY"] or 65)
@@ -3614,7 +3617,7 @@ if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
             if status == "❌ Abwesend": continue
             p_data = next((p for p in nur_spieler if p["id"] == p_id), None)
             if p_data:
-                stats = berechne_statistiken(p_data); c_info = {"id": p_id, "name": p_data["name"], "nr": p_data.get("number", ""), "positions": p_data.get("positions", ["ZM"]), "beteiligung": stats["Beteiligung"]}
+                stats = berechne_statistiken(p_data); c_info = {"id": p_id, "name": p_data["name"], "nr": p_data.get("number", ""), "foot": p_data.get("foot", "Rechts"), "positions": p_data.get("positions", ["ZM"]), "beteiligung": stats["Beteiligung"]}
                 if status == "🔵 Team Blau": blau_fest.append(c_info)
                 elif status == "🟡 Team Gelb": gelb_fest.append(c_info)
                 elif status == "🔵 Ersatz Blau": ersatz_blau_fest.append(c_info)
@@ -3644,7 +3647,8 @@ if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
                 genutzte_namen.add(bester["name"])
                 nr_b = f'<span class="nr">#{bester["nr"]}</span>' if bester["nr"] else ''
                 alle_kader_namen = [sp["name"] for sp in nur_spieler]
-                anzeige_name = kurzes_namensformat(bester["name"], alle_kader_namen)
+                fuss_k = "(L)" if bester.get("foot") == "Links" else "(R)"
+                anzeige_name = f"{kurzes_namensformat(bester['name'], alle_kader_namen)} {fuss_k}"
                 return f'<div class="player" id="{team_id}_{rollen_id}" draggable="true" ondragstart="drag(event)">{nr_b}<span class="name-text">{anzeige_name}</span></div>'
             return ""
 
@@ -3685,8 +3689,11 @@ if selected_tab == "🤖 KI Twin-Teams" and is_trainer:
                     bench_gelb.append(c)
 
         alle_kader_namen = [sp["name"] for sp in nur_spieler]
-        b_blau_list = [f'<div class="player" id="bBlau_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{kurzes_namensformat(x["name"], alle_kader_namen)}</span></div>' for i, x in enumerate(bench_blau)]
-        b_gelb_list = [f'<div class="player" id="bGelb_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{kurzes_namensformat(x["name"], alle_kader_namen)}</span></div>' for i, x in enumerate(bench_gelb)]
+        def name_mit_fuss(x):
+            return f"{kurzes_namensformat(x['name'], alle_kader_namen)} {'(L)' if x.get('foot') == 'Links' else '(R)'}"
+            
+        b_blau_list = [f'<div class="player" id="bBlau_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{name_mit_fuss(x)}</span></div>' for i, x in enumerate(bench_blau)]
+        b_gelb_list = [f'<div class="player" id="bGelb_{i}" draggable="true" ondragstart="drag(event)">{"#"+x["nr"] if x["nr"] else ""}<span class="name-text">{name_mit_fuss(x)}</span></div>' for i, x in enumerate(bench_gelb)]
         
         st.session_state.duo_pitch_html = generiere_duo_pitch_html(
             t_blau, "".join(b_blau_list), gewaehltes_layout_blau,
